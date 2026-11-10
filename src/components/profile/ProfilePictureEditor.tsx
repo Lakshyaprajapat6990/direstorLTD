@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Camera, ImageUp, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "./Avatar";
+import { CameraCaptureDialog } from "./CameraCaptureDialog";
 
 const ACCEPT = ["image/jpeg", "image/png", "image/webp"];
 const MAX_PICK_BYTES = 10 * 1024 * 1024; // what we will try to read; the upload itself is downscaled well under the server's 2 MB limit
@@ -33,7 +34,8 @@ async function prepare(file: File): Promise<Blob> {
 export function ProfilePictureEditor({ currentSrc, initials }: { currentSrc: string | null; initials: string }) {
   const router = useRouter();
   const chooseRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
+  const cameraButtonRef = useRef<HTMLButtonElement>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [blob, setBlob] = useState<Blob | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -109,11 +111,10 @@ export function ProfilePictureEditor({ currentSrc, initials }: { currentSrc: str
       <div className="space-y-2">
         <div className="flex flex-wrap gap-2">
           <input ref={chooseRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" tabIndex={-1} aria-label="Choose a picture from your device" onChange={pick} />
-          <input ref={cameraRef} type="file" accept="image/*" capture="user" className="sr-only" tabIndex={-1} aria-label="Take a picture with your camera" onChange={pick} />
           <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => chooseRef.current?.click()}>
             <ImageUp className="h-4 w-4" /> Upload / choose from gallery
           </Button>
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => cameraRef.current?.click()}>
+          <Button ref={cameraButtonRef} type="button" variant="outline" size="sm" disabled={busy} onClick={() => setCameraOpen(true)}>
             <Camera className="h-4 w-4" /> Take a photo
           </Button>
           {currentSrc && !blob && (
@@ -142,7 +143,7 @@ export function ProfilePictureEditor({ currentSrc, initials }: { currentSrc: str
             <span className="text-xs text-slate-500">Preview - not saved yet.</span>
           </div>
         )}
-        <p className="text-xs text-slate-500">JPEG, PNG or WebP, cropped to a square. &ldquo;Take a photo&rdquo; opens the camera on phones and tablets; on a computer it opens the file chooser.</p>
+        <p className="text-xs text-slate-500">JPEG, PNG or WebP, cropped to a square. &ldquo;Take a photo&rdquo; opens your camera (your browser will ask for permission first).</p>
         {error && (
           <p role="alert" className="text-xs font-medium text-red-600">
             {error}
@@ -154,6 +155,15 @@ export function ProfilePictureEditor({ currentSrc, initials }: { currentSrc: str
           </p>
         )}
       </div>
+      {cameraOpen && (
+        <CameraCaptureDialog
+          onClose={() => {
+            setCameraOpen(false);
+            setTimeout(() => cameraButtonRef.current?.focus(), 0);
+          }}
+          onUse={(file) => void onPick(file)}
+        />
+      )}
     </div>
   );
 }

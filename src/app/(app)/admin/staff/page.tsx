@@ -19,7 +19,7 @@ import { cn } from "@/lib/cn";
 export const metadata: Metadata = { title: "Staff" };
 
 const PAGE_SIZE = 20;
-const ROLE_LABEL = { USER: "User", ADMIN: "Admin", SUPER_ADMIN: "Super Admin" } as const;
+const ROLE_LABEL = { USER: "User", ADMIN: "Admin", SUPER_ADMIN: "Super Admin", CUSTOMER: "Customer" } as const;
 
 type SP = { q?: string; role?: string; status?: string; signedIn?: string; page?: string };
 

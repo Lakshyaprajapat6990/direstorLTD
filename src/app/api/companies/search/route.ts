@@ -11,6 +11,7 @@ import { countActiveRules } from "@/lib/filters/types";
 import { can } from "@/lib/auth/permissions";
 import { filterAccessResponse, redactDirectorFields } from "@/lib/auth/access";
 import { logActivity } from "@/lib/activity";
+import { prefetchSearchResults } from "@/lib/companies-house/officerTriggers";
 
 const bodySchema = z.object({
   filter: z.unknown().optional(),
@@ -67,6 +68,10 @@ export async function POST(request: Request) {
       await logActivity(session, "search", { meta: { activeRules, q: term?.slice(0, 80) ?? null, scope: scope ?? "all", total: result.total }, dedupeMs: 60_000, dedupeSameMeta: true });
     }
   }
+
+  // Capped prefetch of officer data for the ACTIVE companies on this page (first 25, lowest priority, per-user and global
+  // daily budgets - see officerTriggers.ts). Best effort: a failure here never affects the search.
+  await prefetchSearchResults(session, result.rows);
 
   const states = await db.userCompanyState.findMany({
     where: { userId: session.userId, companyId: { in: result.rows.map((r) => r.id) } },

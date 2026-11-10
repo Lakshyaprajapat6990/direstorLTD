@@ -2,10 +2,12 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Loader2 } from "lucide-react";
-import { Input, Label } from "@/components/ui/Input";
+import { Input } from "@/components/ui/Input";
 import { PasswordInput } from "@/components/ui/PasswordInput";
 import { Button } from "@/components/ui/Button";
+import { safeNextPath } from "@/lib/home-search";
 
 export function LoginForm() {
   const router = useRouter();
@@ -14,6 +16,13 @@ export function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  function finish() {
+    // Only a path on this site is followed: ?next= must never be usable as an open redirect.
+    const next = safeNextPath(searchParams.get("next")) ?? "/dashboard";
+    router.push(next);
+    router.refresh();
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -31,9 +40,7 @@ export function LoginForm() {
         setLoading(false);
         return;
       }
-      const next = searchParams.get("next") || "/dashboard";
-      router.push(next);
-      router.refresh();
+      finish();
     } catch {
       setError("Could not reach the server. Please try again.");
       setLoading(false);
@@ -48,8 +55,9 @@ export function LoginForm() {
         </div>
       )}
       <div>
-        <Label>Email address</Label>
+        <label htmlFor="login-email" className="mb-1.5 block text-xs font-medium text-slate-700">Email address</label>
         <Input
+          id="login-email"
           type="email"
           required
           autoComplete="email"
@@ -59,8 +67,14 @@ export function LoginForm() {
         />
       </div>
       <div>
-        <Label>Password</Label>
+        <div className="mb-1.5 flex items-center justify-between">
+          <label htmlFor="login-password" className="block text-xs font-medium text-slate-700">Password</label>
+          <Link href="/forgot-password" className="text-xs font-medium text-indigo-600 hover:text-indigo-700 focus-ring rounded-sm">
+            Forgot password?
+          </Link>
+        </div>
         <PasswordInput
+          id="login-password"
           required
           autoComplete="current-password"
           value={password}

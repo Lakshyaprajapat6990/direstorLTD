@@ -8,6 +8,14 @@ import {
 } from "./officers";
 import { CompaniesHouseNotFoundError } from "./client";
 import type { QuotaClass } from "./quota";
+import { isNonUkCompany } from "./eligibility";
+
+// Thrown instead of storing a company that is not a UK company (overseas entity, overseas company, UK establishment).
+export class NonUkCompanyError extends Error {
+  constructor(public companyNumber: string, public companyType: string | undefined) {
+    super(`${companyNumber} is not a UK company (${companyType ?? "unknown type"}); not stored`);
+  }
+}
 
 // Fetches a company's real profile from Companies House and upserts it.
 // Used by: REST enrichment after a DS01 stream event, on-demand refresh,
@@ -18,6 +26,8 @@ export async function syncCompanyProfile(
   options: { quotaClass?: QuotaClass } = {}
 ) {
   const profile = await fetchCompanyProfile(companyNumber, { quotaClass: options.quotaClass ?? (source === "stream" ? "stream" : "filing") });
+  // UK companies only: never create (or refresh) a record for an overseas entity / overseas company / UK establishment.
+  if (isNonUkCompany({ companyNumber: profile.company_number, type: profile.type })) throw new NonUkCompanyError(profile.company_number.toUpperCase(), profile.type);
   const existing = await db.company.findUnique({
     where: { companyNumber: profile.company_number.toUpperCase() },
     select: { ds01FiledAt: true },

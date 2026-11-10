@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { compileFilterToWhere, hasActiveDirectorRules, type CompileMode } from "@/lib/filters/compile";
 import { REAL_COMPANIES_WHERE, visibleCompaniesWhere } from "./scope";
 import { nameLetterConditions } from "@/lib/filters/nameLetter";
+import { companyNumberSearchKeys } from "@/lib/filters/companyNumberQuery";
 
 export const SORTABLE_FIELDS = [
   "name",
@@ -80,13 +81,19 @@ export function buildCompanyWhere(opts: {
 
   const term = opts.q?.trim();
   if (term) {
-    and.push({
-      OR: [
-        { name: { contains: term, mode: "insensitive" } },
-        { companyNumber: { contains: term.toUpperCase() } },
-        { registeredPostcode: { contains: term.toUpperCase() } },
-      ],
-    });
+    const numberKeys = companyNumberSearchKeys(term);
+    if (numberKeys) {
+      // Company-number-shaped input: exact lookup (see companyNumberQuery.ts), not the combined OR below.
+      and.push({ companyNumber: { in: numberKeys } });
+    } else {
+      and.push({
+        OR: [
+          { name: { contains: term, mode: "insensitive" } },
+          { companyNumber: { contains: term.toUpperCase() } },
+          { registeredPostcode: { contains: term.toUpperCase() } },
+        ],
+      });
+    }
   }
 
   const letter = opts.namePrefix?.trim().toUpperCase();
@@ -136,8 +143,9 @@ export async function countRealCompanies(ttlMs = 60_000): Promise<number> {
 }
 
 // Headline register figures for the dashboard and landing page: total, active, dissolved and how many
-// companies have confirmed director data. Real rows only, one grouped scan per figure set, memoised for
-// five minutes (informational, so it must never scan the register per request).
+// companies have confirmed director data. UK companies only (REAL_COMPANIES_WHERE), one grouped scan per figure set, memoised for
+// five minutes (informational, so it must never scan the register per request). Every other status is total - active - dissolved,
+// derived by the callers from these same counts, so the three always add up to the total.
 export interface RegisterBreakdown {
   total: number;
   active: number;
@@ -148,16 +156,21 @@ let breakdownCache: { value: RegisterBreakdown; at: number } | null = null;
 export async function getRegisterBreakdown(ttlMs = 5 * 60_000): Promise<RegisterBreakdown> {
   const now = Date.now();
   if (breakdownCache && now - breakdownCache.at < ttlMs) return breakdownCache.value;
-  const [byStatus, byCoverage] = await Promise.all([
+  // directorsConfirmed = THE definition of "companies with confirmed director data", used by the staff Dashboard, the customer
+  // dashboard and the public landing page alike: officers fully fetched AND at least one current (not resigned) director or LLP
+  // member (directorCount > 0). Companies House answers an empty officer list (HTTP 200, items: []) for a company with no officer
+  // data; those are stored as coverage "full" with directorCount 0, so an empty answer, a failed/unfetched request, or a company
+  // with only resigned officers or secretaries is never counted.
+  const [byStatus, directorsConfirmed] = await Promise.all([
     db.company.groupBy({ by: ["status"], where: REAL_COMPANIES_WHERE, _count: { _all: true } }),
-    db.company.groupBy({ by: ["officersCoverage"], where: REAL_COMPANIES_WHERE, _count: { _all: true } }),
+    db.company.count({ where: { ...REAL_COMPANIES_WHERE, officersCoverage: "full", directorCount: { gt: 0 } } }),
   ]);
   const count = (rows: { _count: { _all: number } }[]) => rows.reduce((n, r) => n + r._count._all, 0);
   const value = {
     total: count(byStatus),
     active: count(byStatus.filter((r) => r.status === "active")),
     dissolved: count(byStatus.filter((r) => r.status === "dissolved")),
-    directorsConfirmed: count(byCoverage.filter((r) => r.officersCoverage === "full")),
+    directorsConfirmed,
   };
   breakdownCache = { value, at: now };
   return value;

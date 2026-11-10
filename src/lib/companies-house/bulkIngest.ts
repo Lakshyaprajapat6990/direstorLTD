@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { chRestGet, CompaniesHouseRateLimitError } from "./client";
 import { syncCompanyProfile } from "./sync";
 import { parseChDate } from "./csv/dates";
+import { isNonUkCompany } from "./eligibility";
 import { emptyMappingStats, mapCsvRecord, missingColumns, normalisePostcode, type CompanyCsvRow } from "./csv/mapping";
 import { downloadToCache, openCsvFile, resolveLatestMonthlyUrl } from "./csv/source";
 import { classifyRun, ErrorSampler, finishRun, isStale, startRun, touchRun } from "@/lib/jobs/runs";
@@ -469,7 +470,11 @@ export async function bulkIngestFromCsv(options: CsvIngestOptions = {}): Promise
       consumed = rowIndex;
 
       const mapped = mapCsvRecord(record, mappingStats);
-      if (!mapped.ok) {
+      if (!mapped.ok && mapped.ineligible) {
+        // Not a UK company: left out by design. Counted in the run stats, but neither a rejection nor a failure, so it can
+        // never raise the error rate or fill the row-failure ledger.
+        mappingStats.nonUkExcluded = (mappingStats.nonUkExcluded ?? 0) + 1;
+      } else if (!mapped.ok) {
         t.rejected++;
         samples.add(rowIndex, mapped.reason, mapped.companyNumber);
         ledger.push({ rowNumber: rowIndex, companyNumber: mapped.companyNumber ?? null, kind: "rejected", reason: mapped.reason, retryState: "permanent" });
@@ -652,7 +657,9 @@ export async function bulkIngestFromSearch(options: SearchIngestOptions) {
     });
     const items = (res.items ?? []).slice(0, options.limit);
 
-    for (const item of items) {
+    // UK companies only (see eligibility.ts): overseas entities, overseas companies and UK establishments are left out, not skipped.
+    const eligible = items.filter((item) => !isNonUkCompany({ companyNumber: item.company_number, type: item.company_type }));
+    for (const item of eligible) {
       rowsRead++;
       const incorporationDate = parseChDate(item.date_of_creation);
       if (!incorporationDate) {
@@ -694,7 +701,7 @@ export async function bulkIngestFromSearch(options: SearchIngestOptions) {
     await touchRun(run.id, { rowsRead, rowsInserted, rowsUpdated, rowsSkipped, rowsFailed, rowsProcessed: rowsInserted + rowsUpdated });
 
     // Enrich a bounded subset with the full REST profile.
-    for (const item of items.slice(0, options.enrichLimit)) {
+    for (const item of eligible.slice(0, options.enrichLimit)) {
       try {
         await withRateLimitRetry(() => syncCompanyProfile(item.company_number, "rest_enrichment", { quotaClass: "backfill" }));
       } catch (err) {

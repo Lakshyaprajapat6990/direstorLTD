@@ -50,6 +50,7 @@ export function CompanyExplorer({
   title,
   meta,
   initialQuery = "",
+  initialFilter,
   initialColumns,
   columnsNotice = false,
 }: {
@@ -59,6 +60,8 @@ export function CompanyExplorer({
   meta?: { total: number; lastUpdated: string | null };
   // Pre-fills the search box (the dashboard search sends people here with ?q=).
   initialQuery?: string;
+  // Filters carried in from the homepage search (built from the same registry the Advanced Search panel edits).
+  initialFilter?: FilterGroupNode;
   // The signed-in user's columns (their own saved list, or the recommended layout), resolved on the server.
   initialColumns?: string[];
   // True when the recommended layout changed after the user saved their own.
@@ -67,10 +70,10 @@ export function CompanyExplorer({
   const router = useRouter();
   const [columns, setColumns] = useState<string[]>(initialColumns && initialColumns.length ? initialColumns : BUILTIN_DEFAULT);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [filter, setFilter] = useState<FilterGroupNode>(emptyFilterGroup());
+  const [filter, setFilter] = useState<FilterGroupNode>(initialFilter ?? emptyFilterGroup());
   const [q, setQ] = useState(initialQuery);
   const [letter, setLetter] = useState<string | null>(null);
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(Boolean(initialFilter && initialFilter.children.length));
   const [page, setPage] = useState(1);
   const [sortField, setSortField] = useState<SortableField>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");

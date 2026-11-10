@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth/session";
 import { denyUnless } from "@/lib/auth/require";
 import { logActivity } from "@/lib/activity";
 import { resolveStatePatch, statePatchSchema } from "@/lib/data/company-state";
+import { queueTrackedCompanies } from "@/lib/companies-house/officerTriggers";
 
 // Follow/Trash exclusivity lives in resolveStatePatch; Saved and Red Flag are independent.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -26,6 +27,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     create: { userId: session.userId, companyId: id, ...next },
     update: next,
   });
+
+  // Following / saving / red-flagging a company queues its officer data (best effort, budgeted; never fails this request).
+  await queueTrackedCompanies(session, [id], next);
 
   await logActivity(
     session,

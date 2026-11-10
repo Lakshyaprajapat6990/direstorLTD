@@ -13,7 +13,7 @@ import { formatDate } from "@/lib/data/format";
 import type { UserRole } from "@/lib/types";
 import { Avatar } from "@/components/profile/Avatar";
 import { PasswordInput } from "@/components/ui/PasswordInput";
-import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
+import { MIN_PASSWORD_LENGTH, validatePassword } from "@/lib/auth/password-policy";
 import { PermissionMatrix } from "@/components/staff/PermissionMatrix";
 import { ALL_PERMISSION_KEYS, NEW_ACCOUNT_DEFAULT, type PermissionKey } from "@/lib/auth/permissions";
 import { CURRENCIES, parseRateToMinor } from "@/lib/staff/money";
@@ -34,13 +34,15 @@ const ROLE_TONE: Record<UserRole, "indigo" | "blue" | "slate"> = {
   SUPER_ADMIN: "indigo",
   ADMIN: "blue",
   USER: "slate",
+  CUSTOMER: "slate",
 };
 
-const ROLE_ICON = { SUPER_ADMIN: ShieldCheck, ADMIN: Shield, USER: UserIcon } as const;
+const ROLE_ICON = { SUPER_ADMIN: ShieldCheck, ADMIN: Shield, USER: UserIcon, CUSTOMER: UserIcon } as const;
 const AVATAR: Record<UserRole, string> = {
   SUPER_ADMIN: "bg-indigo-600 text-white",
   ADMIN: "bg-violet-100 text-violet-700",
   USER: "bg-slate-200 text-slate-600",
+  CUSTOMER: "bg-slate-100 text-slate-500",
 };
 
 export function UsersClient({ initialUsers, canAssignRoles, currentUserId, supervisors }: { initialUsers: UserVM[]; canAssignRoles: boolean; currentUserId: string; supervisors: { id: string; name: string }[] }) {
@@ -64,6 +66,12 @@ export function UsersClient({ initialUsers, canAssignRoles, currentUserId, super
     setError(null);
     if (!form.name.trim() || !form.email.trim() || form.password.length < MIN_PASSWORD_LENGTH) {
       setError(`Name, email and a password of at least ${MIN_PASSWORD_LENGTH} characters are required.`);
+      return;
+    }
+    // Same rule the server applies (shared function), so the message appears immediately and is never a surprise.
+    const weakness = validatePassword(form.password, { email: form.email.trim().toLowerCase(), name: form.name });
+    if (weakness) {
+      setError(weakness);
       return;
     }
     const minor = rate.trim() === "" ? null : parseRateToMinor(rate);
@@ -240,6 +248,7 @@ export function UsersClient({ initialUsers, canAssignRoles, currentUserId, super
                           className="w-auto"
                           disabled={u.id === currentUserId}
                         >
+                          {u.role === "CUSTOMER" && <option value="CUSTOMER">Customer</option>}
                           <option value="USER">User</option>
                           <option value="ADMIN">Admin</option>
                           <option value="SUPER_ADMIN">Super Admin</option>

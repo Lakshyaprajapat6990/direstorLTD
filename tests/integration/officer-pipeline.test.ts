@@ -379,7 +379,8 @@ test("worker crawl (P5): keyset cursor, active companies first, resumes after a 
       return makeCompany({ companyNumber: num, status });
     };
     const act = [await mkc("a", "active"), await mkc("b", "active"), await mkc("c", "active")];
-    const dis = [await mkc("d", "dissolved"), await mkc("e", "dissolved")];
+    const dis = [await mkc("d", "liquidation"), await mkc("e", "administration")]; // live but not active: crawled in the second phase
+    const gone = [await mkc("g", "dissolved"), await mkc("h", "dissolved")]; // dissolved: never crawled (on demand only)
     const activeSorted = act.map((c) => c.companyNumber);
 
     const first = await runOfficerWorker({ queue: false, crawl: true, maxCompanies: 2, exitWhenIdle: true, freshness: false, batchSize: 10 });
@@ -391,10 +392,14 @@ test("worker crawl (P5): keyset cursor, active companies first, resumes after a 
     assert.equal((await loadCrawlCursor()).phase, "active");
 
     const second = await runOfficerWorker({ queue: false, crawl: true, exitWhenIdle: true, freshness: false, batchSize: 10 });
-    assert.equal(second.crawled, 3, "the remaining active company + both non-active ones");
+    assert.equal(second.crawled, 3, "the remaining active company + both live non-active ones");
     for (const c of [...act, ...dis]) assert.equal((await db.company.findUniqueOrThrow({ where: { id: c.id } })).officersCoverage, "full");
     for (const n of [...activeSorted, ...dis.map((c) => c.companyNumber)]) assert.equal(hits[`/company/${n}/officers`], 1, `${n} fetched exactly once`);
     assert.equal(await db.officerSyncJob.count(), 0, "the crawl never materialises job rows for companies it fetched");
+    for (const c of gone) {
+      assert.equal((await db.company.findUniqueOrThrow({ where: { id: c.id } })).officersCoverage, "none", "a dissolved company is never crawled");
+      assert.equal(hits[`/company/${c.companyNumber}/officers`] ?? 0, 0, "and no request is sent for it");
+    }
 
     const third = await runOfficerWorker({ queue: false, crawl: true, exitWhenIdle: true, freshness: false });
     assert.equal(third.crawled, 0);

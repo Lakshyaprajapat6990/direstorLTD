@@ -24,6 +24,7 @@ export interface BrowserPage {
   eval<T = unknown>(expression: string): Promise<T>;
   waitFor(expression: string, timeoutMs?: number): Promise<void>;
   click(selector: string): Promise<void>;
+  mouseClick(x: number, y: number): Promise<void>; // a real pointer click at page coordinates (for cross-origin widgets)
   type(selector: string, text: string): Promise<void>;
   setViewport(width: number, height: number, mobile?: boolean): Promise<void>;
   screenshot(file: string, fullPage?: boolean): Promise<void>;
@@ -37,7 +38,7 @@ export async function launchPage(port: number): Promise<BrowserPage> {
   const chrome = findChrome();
   if (!chrome) throw new Error("Chrome not found");
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "dl-chrome-"));
-  const proc: ChildProcess = spawn(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "--window-size=1440,900", "about:blank"], { stdio: "ignore" });
+  const proc: ChildProcess = spawn(chrome, [...(process.env.DL_CHROME_HEADED ? [] : ["--headless=new"]), "--disable-gpu", "--no-first-run", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "--window-size=1440,900", "about:blank"], { stdio: "ignore" });
 
   let target: { webSocketDebuggerUrl: string } | undefined;
   for (let i = 0; i < 60 && !target; i++) {
@@ -112,6 +113,9 @@ export async function launchPage(port: number): Promise<BrowserPage> {
     async click(selector) {
       await waitFor(`document.querySelector(${JSON.stringify(selector)})`);
       await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+    },
+    async mouseClick(x, y) {
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
     },
     async type(selector, text) {
       await waitFor(`document.querySelector(${JSON.stringify(selector)})`);

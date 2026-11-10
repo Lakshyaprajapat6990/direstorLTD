@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { NON_UK_COMPANY_TYPES } from "@/lib/companies-house/eligibility";
 
 // Real vs development ("seed") data.
 //
@@ -21,4 +22,7 @@ export function visibleCompaniesWhere(): Prisma.CompanyWhereInput {
   return seedDataVisible() ? {} : { source: { not: "seed" } };
 }
 
-export const REAL_COMPANIES_WHERE: Prisma.CompanyWhereInput = { source: { not: "seed" } };
+// The headline register figures (dashboard, landing page, app header) are UK companies only: real rows (not seed) whose Companies
+// House type is not one of the non-UK types. The ingestion pipelines never store those (see companies-house/eligibility.ts); this
+// keeps the figures right even if one ever got in.
+export const REAL_COMPANIES_WHERE: Prisma.CompanyWhereInput = { source: { not: "seed" }, type: { notIn: [...NON_UK_COMPANY_TYPES] } };

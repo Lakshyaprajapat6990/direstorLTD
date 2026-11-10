@@ -52,12 +52,19 @@ interface LinkButtonProps {
   size?: Size;
   className?: string;
   children: React.ReactNode;
+  // Optional, used by the website editor's button settings. Absent: the output is exactly what it always was.
+  style?: React.CSSProperties;
+  newTab?: boolean;
+  attrs?: Record<string, string>;
 }
 
-export function LinkButton({ href, variant = "primary", size = "md", className, children }: LinkButtonProps) {
+export function LinkButton({ href, variant = "primary", size = "md", className, children, style, newTab, attrs }: LinkButtonProps) {
   return (
     <Link
       href={href}
+      {...(style ? { style } : {})}
+      {...(newTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+      {...attrs}
       className={cn(
         "inline-flex items-center justify-center font-medium transition-colors focus-ring",
         variantClasses[variant],

@@ -2,11 +2,19 @@
 import "../support/require-scratch-db"; // must stay first: integration tests create/delete rows
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { mintChallenge } from "@/lib/auth/captcha";
 import { randomUUID } from "node:crypto";
 
 export const BASE = process.env.TEST_BASE_URL ?? "http://127.0.0.1:3211";
 export const BASE_PROD = process.env.TEST_BASE_URL_PROD ?? "http://127.0.0.1:3212";
 export const db = new PrismaClient();
+
+// A valid numeric-CAPTCHA ticket and its answer. The test process holds the same AUTH_SECRET as the servers (see
+// scripts/test-integration.ts), so it can mint what a person would read from the image.
+export const captchaFields = (now = Date.now()) => {
+  const c = mintChallenge(now);
+  return { captchaToken: c.ticket, captchaAnswer: c.answer };
+};
 
 export const STRONG_PASSWORD = "Correct-Horse-Battery-42!";
 let hash: string | null = null;

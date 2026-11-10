@@ -28,7 +28,7 @@ interface ActionDef {
 const ACTIONS: Record<string, ActionDef> = {
   login: { category: "security", describe: () => "Signed in" },
   logout: { category: "security", describe: () => "Signed out" },
-  login_failed: { category: "security", describe: (m) => `Failed sign-in attempt${m.reason === "inactive" ? " (account deactivated)" : ""}` },
+  login_failed: { category: "security", describe: (m) => `Failed sign-in attempt${m.reason === "inactive" ? " (account deactivated)" : m.reason === "bad_second_factor" ? " (wrong authenticator code)" : ""}` },
 
   search: {
     category: "companies",
@@ -87,10 +87,19 @@ const ACTIONS: Record<string, ActionDef> = {
   staff_report_exported: { category: "admin", describe: (m) => `Exported a staff activity report (${m.rows ?? "?"} people, ${s(m.from)} to ${s(m.to)})` },
   session_ended_by_admin: { category: "admin", describe: () => "Ended a session" },
   profile_picture_changed: { category: "admin", describe: (m) => (m.action === "removed" ? "Removed their profile picture" : "Changed their profile picture") },
+  profile_updated: { category: "admin", describe: (m) => `Updated their account details${Array.isArray(m.fields) && m.fields.length ? ` (${m.fields.join(", ")})` : ""}` },
+  marketing_consent_changed: { category: "admin", describe: (m) => `${m.granted ? "Allowed" : "Withdrew"} ${s(m.channel, "marketing")} marketing` },
+  two_factor_setup_started: { category: "security", describe: () => "Started authenticator app setup" },
+  two_factor_enabled: { category: "security", describe: () => "Switched on authenticator app sign-in" },
+  two_factor_disabled: { category: "security", describe: () => "Switched off authenticator app sign-in" },
+  two_factor_recovery_regenerated: { category: "security", describe: () => "Replaced their recovery codes" },
   column_settings_changed: { category: "admin", describe: (m) => `Changed column settings (${s(m.what, "settings").replace(/_/g, " ")})` },
   officer_retry_parked: { category: "admin", describe: () => "Re-queued parked officer fetches" },
   ch_breaker_reset: { category: "admin", describe: () => "Reset a Companies House circuit breaker" },
   officer_fetch_queued: { category: "companies", describe: () => "Queued an officer fetch" },
+  officer_queued_tracked: { category: "companies", describe: (m) => `Queued ${m.queued ?? "?"} company officer fetch(es) (${s(m.reason, "followed").replace(/_/g, " ")})` },
+  officer_queued_report: { category: "companies", describe: (m) => `Queued ${m.queued ?? "?"} company officer fetch(es) for a report` },
+  officer_queued_prefetch: { category: "companies", describe: (m) => `Queued ${m.queued ?? "?"} company officer fetch(es) from search results` },
 };
 
 export function actionCategory(action: string): ActionCategory {

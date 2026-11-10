@@ -43,7 +43,8 @@ export async function proxy(request: NextRequest) {
 
   if (isProtected && !authed) {
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("next", pathname);
+    // The whole address, query string included, so a search or filter survives the trip through the sign-in page.
+    loginUrl.searchParams.set("next", pathname + request.nextUrl.search);
     return NextResponse.redirect(loginUrl);
   }
 

@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { requireSession } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
 import { Badge } from "@/components/ui/Badge";
-import { Settings as SettingsIcon, Database, Plug, Users, Workflow, User as UserIcon, Mail, ShieldCheck, CalendarDays } from "lucide-react";
+import { Settings as SettingsIcon, Database, Plug, Users, Workflow, User as UserIcon, Mail, ShieldCheck, CalendarDays, Megaphone } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { PageHero, SectionCard, Panel, StatRow, StatusPill } from "@/components/admin/AdminUi";
 import { formatDate } from "@/lib/data/format";
@@ -18,12 +18,64 @@ import { PERMISSIONS } from "@/lib/auth/permissions";
 import { avatarUrl, findAvatar } from "@/lib/avatar";
 import { Avatar } from "@/components/profile/Avatar";
 import { ProfilePictureEditor } from "@/components/profile/ProfilePictureEditor";
+import { loadConsent, loadProfile } from "@/lib/customer/profile-store";
+import { CustomerDetailsClient } from "./CustomerDetailsClient";
+import { COUNTRY_CODES, countryName } from "@/lib/customer/profile";
+import { MarketingPreferencesClient } from "./MarketingPreferencesClient";
+
+// Customer cards: a hairline border with a soft, layered shadow so the sections lift off the page without looking heavy.
+const CARD = "border-slate-200/80 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.12)]";
 
 export const metadata: Metadata = { title: "Settings" };
 
 
 export default async function SettingsPage() {
   const session = await requireSession();
+  // A customer sees their own account, details and column choices. The pipeline status, API-key state
+  // and the staff permission list below are internal configuration and are never read or rendered for them.
+  if (session.role === "CUSTOMER") {
+    const found = await findAvatar(session.userId);
+    const picture = found ? avatarUrl(session.userId, found.mtimeMs) : null;
+    const initials = session.name.slice(0, 2).toUpperCase();
+    const [{ values: details }, consent] = await Promise.all([loadProfile(session.userId), loadConsent(session.userId)]);
+    return (
+      <div className="mx-auto w-full max-w-[900px] space-y-5">
+        <PageHero icon={SettingsIcon} eyebrow="Account" title="Settings" description="Your DIRECTOR.LTD account." />
+        <SectionCard className={CARD} icon={UserIcon} tone="indigo" title="Your account" description="The details you registered with.">
+          <dl className="grid gap-4 p-5 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Name</dt>
+              <dd className="mt-1 text-slate-900">{session.name}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Email</dt>
+              <dd className="mt-1 break-all text-slate-900">{session.email}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Account type</dt>
+              <dd className="mt-1 text-slate-900">Customer</dd>
+            </div>
+          </dl>
+        </SectionCard>
+        <section id="profile-picture" className="scroll-mt-24">
+          <SectionCard className={CARD} icon={UserIcon} tone="indigo" title="Profile picture" description="Shown in the header next to your name. Only you can change it.">
+            <ProfilePictureEditor currentSrc={picture} initials={initials} />
+          </SectionCard>
+        </section>
+        <section id="your-details" className="scroll-mt-24">
+          <SectionCard className={CARD} icon={UserIcon} tone="indigo" title="Your details" description="Optional contact details. Only you can see and change them here.">
+            <CustomerDetailsClient initial={details} countries={[...COUNTRY_CODES].map((c) => ({ code: c, name: countryName(c) })).sort((a, b) => a.name.localeCompare(b.name, "en-GB"))} />
+          </SectionCard>
+        </section>
+        <section id="marketing" className="scroll-mt-24">
+          <SectionCard className={CARD} icon={Megaphone} tone="emerald" title="Marketing preferences" description="Optional. Off unless you turn it on, and you can withdraw at any time.">
+            <MarketingPreferencesClient initial={consent.state} history={consent.history} hasPhone={!!details.phone} />
+          </SectionCard>
+        </section>
+        <ColumnPicker variant="card" />
+      </div>
+    );
+  }
   const restConfigured = isRestConfigured();
   const streamConfigured = isStreamConfigured();
   const googleConfigured = isGoogleCalendarConfigured();

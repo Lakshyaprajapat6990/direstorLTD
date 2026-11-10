@@ -14,7 +14,10 @@ export function makeLogger(component: string) {
       (level === "error" || level === "warn" ? process.stderr : process.stdout).write(line + "\n");
     } else {
       const extra = Object.keys(fields).length ? " " + JSON.stringify(fields) : "";
-      (level === "error" || level === "warn" ? console.error : console.log)(`[${ts}] ${level.toUpperCase()} ${component}: ${message}${extra}`);
+      // Warnings use console.warn, not console.error: Next's dev server turns every server-side console.error into a red error
+      // overlay, and a warning (e.g. "mail is not configured") is not an error. Both still go to stderr.
+      const write = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+      write(`[${ts}] ${level.toUpperCase()} ${component}: ${message}${extra}`);
     }
   };
   return {

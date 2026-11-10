@@ -46,6 +46,12 @@ model User {
   recentlyViewed      RecentlyViewed[]
   columnPreference    UserColumnPreference?
   sessions            UserSession[]
+  customerCompanyViews CustomerCompanyView[]
+  passwordResetTokens  PasswordResetToken[]
+  customerProfile      CustomerProfile?
+  consentRecords       ConsentRecord[]
+  twoFactor            CustomerTwoFactor?
+  twoFactorRecoveryCodes TwoFactorRecoveryCode[]
   contactLogs         ContactLog[]
   assignmentsReceived Assignment[]          @relation("AssignmentAssignee")
   assignmentsGiven    Assignment[]          @relation("AssignmentAssigner")
@@ -53,6 +59,107 @@ model User {
   timesheetsReviewed  Timesheet[]           @relation("TimesheetReviewer")
 
   @@index([managerId])
+}
+
+// Optional contact details a customer chooses to add AFTER registering (Settings > Your details). One row per customer, created on
+// first save. Every column is optional; nothing here is needed to use the account. phone is stored normalised (E.164). The
+// phone is NOT proof of anything until phoneVerifiedAt is set, which only the (not yet available) SMS verification may do.
+model CustomerProfile {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String?
+  firstName       String?
+  middleName      String?
+  surname         String?
+  businessName    String?
+  address1        String?
+  address2        String?
+  address4        String?
+  town            String?
+  state           String?
+  country         String?
+  postcode        String?
+  phone           String?
+  phoneVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// Append-only history of marketing permission choices (UK GDPR / PECR evidence). One row per CHANGE of one channel's choice:
+// who, which channel, granted or withdrawn, the exact wording and notice version shown, where and when. The current choice for a
+// channel is its newest row; no row means no consent was ever given. Rows are never updated or deleted by the application.
+model ConsentRecord {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel   String // "email" | "sms"
+  granted   Boolean
+  version   String // wording / notice version (src/lib/customer/consent.ts)
+  wording   String // the exact statement the person saw (or, for a withdrawal, the statement that applied)
+  source    String // "settings" | "phone_removed"
+  createdAt DateTime @default(now())
+
+  @@index([userId, channel, createdAt])
+}
+
+// Authenticator-app (TOTP, RFC 6238) two-factor sign-in for customers. Optional: no row = 2FA off. A row with enabledAt NULL is a
+// PENDING enrolment (the secret has been shown but no code has been proven yet) and never affects sign-in; it expires at
+// pendingExpiresAt. The secret is stored only encrypted (AES-256-GCM, src/lib/auth/two-factor-crypto.ts). lastStep is the newest
+// accepted TOTP time step, so a code can never be accepted twice (replay protection).
+model CustomerTwoFactor {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  secretEnc        String
+  enabledAt        DateTime?
+  pendingExpiresAt DateTime?
+  lastStep         Int?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+// One-time recovery codes. Only a keyed hash is stored (never the code); usedAt marks the single use.
+model TwoFactorRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// Free customer accounts (role CUSTOMER) may open a limited number of DIFFERENT company profiles for their whole life. One
+// row = one company opened by one customer; the unique pair makes re-opening free and a double-submit harmless. The count of a
+// user's rows is the quota used (src/lib/customer/free-tier.ts takes a row lock on the User before inserting, so parallel
+// requests cannot exceed it). companyId deliberately has no foreign key: company ingestion must never be blocked by, or
+// silently refund, a customer's usage.
+model CustomerCompanyView {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, companyId])
+}
+
+// Password recovery. The emailed link carries a random 256-bit secret; only its SHA-256 hash is stored here, so a copy of this
+// table cannot be used to reset anyone's password. A token is valid until expiresAt and only while usedAt is NULL; resetting a
+// password sets usedAt in the same transaction (a conditional UPDATE, so two simultaneous uses cannot both succeed).
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 // One row per sign-in. endedAt is set ONLY by an explicit logout (or an administrator ending the session): a closed
@@ -65,7 +172,7 @@ model UserSession {
   startedAt      DateTime  @default(now())
   lastActivityAt DateTime  @default(now())
   endedAt        DateTime?
-  endReason      String? // logout | deactivated | admin_ended
+  endReason      String? // logout | deactivated | admin_ended | password_reset
   userAgent      String?
 
   @@index([userId, startedAt])
@@ -671,4 +778,71 @@ model UserColumnPreference {
   baseLayoutId      String?
   baseLayoutVersion Int?
   updatedAt         DateTime @updatedAt
+}
+
+// Website Content (CMS) for the public landing page. These two tables are independent of every company, report,
+// ingestion and permission table: no relation to User (author id + name are snapshots, so deleting or renaming a user never
+// changes history) and nothing here is ever read by the dashboard or the company tools.
+//
+// One row per public page ("home"). Created lazily by the first draft save; absent row = the built-in defaults.
+// publishedVersion 0 means "never published". Draft saves bump draftVersion; draftBaseVersion is the published version the
+// draft was started from, so a draft that predates a later publish / rollback can be recognised as stale.
+// The migration adds CHECK constraints (object-typed JSON, size caps, version invariants) Prisma cannot express.
+model SiteContent {
+  key              String    @id
+  schemaVersion    Int       @default(1)
+  draftJson        Json?
+  draftVersion     Int       @default(0)
+  draftBaseVersion Int?
+  draftUpdatedAt   DateTime?
+  draftUpdatedById String?
+  publishedJson    Json?
+  publishedVersion Int       @default(0)
+  publishedAt      DateTime?
+  publishedById    String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  revisions SiteContentRevision[]
+}
+
+// Immutable history of everything that was ever published (kind "publish") or restored (kind "rollback"). A database
+// trigger rejects UPDATE, DELETE and TRUNCATE; the foreign key is RESTRICT so a content row with history cannot be removed.
+model SiteContentRevision {
+  id                  String      @id @default(cuid())
+  contentKey          String
+  content             SiteContent @relation(fields: [contentKey], references: [key], onDelete: Restrict)
+  version             Int
+  kind                String
+  contentJson         Json
+  schemaVersion       Int
+  restoredFromVersion Int?
+  note                String?
+  authorId            String
+  authorName          String
+  contentHash         String
+  createdAt           DateTime    @default(now())
+
+  @@unique([contentKey, version])
+  @@index([contentKey, createdAt])
+}
+
+// Images uploaded for the website editor. Stored in the database (not on disk) so they survive redeploys and container
+// replacement whatever the hosting looks like, and so a restored revision can never point at a missing file. Immutable and
+// never deleted (a trigger in the migration enforces it) because published revisions may refer to them. Not related to any
+// other table; the uploader is a plain id + name snapshot.
+model SiteMedia {
+  id             String   @id
+  mimeType       String
+  byteSize       Int
+  width          Int
+  height         Int
+  sha256         String   @unique
+  data           Bytes
+  originalName   String?
+  uploadedById   String
+  uploadedByName String
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
 }

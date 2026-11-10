@@ -5,6 +5,8 @@ import { denyUnless } from "@/lib/auth/require";
 import { logActivity } from "@/lib/activity";
 import { buildCompanyWhere } from "@/lib/data/companies";
 import { filterErrorResponse } from "@/lib/api/filter-errors";
+import { can } from "@/lib/auth/permissions";
+import { enqueueReportOfficers } from "@/lib/companies-house/officerTriggers";
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -34,5 +36,6 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   });
 
   await logActivity(session, "report_refreshed", { meta: { name: updated.name }, reportId: id });
+  if (can(session, "companies.directors")) await enqueueReportOfficers(updated, { actor: session, ownerChecked: true });
   return NextResponse.json({ report: updated });
 }

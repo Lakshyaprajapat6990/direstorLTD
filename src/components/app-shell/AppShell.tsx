@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandDot } from "@/components/brand/BrandDot";
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -9,7 +10,7 @@ import { visibleNavItems, findActiveNavItem } from "@/lib/nav";
 import { cn } from "@/lib/cn";
 import { Avatar } from "@/components/profile/Avatar";
 
-const ROLE_RANK: Record<UserRole, number> = { USER: 0, ADMIN: 1, SUPER_ADMIN: 2 };
+const ROLE_RANK: Record<UserRole, number> = { CUSTOMER: -1, USER: 0, ADMIN: 1, SUPER_ADMIN: 2 };
 
 // Product shell: a two-row header (brand + actions, then primary navigation) over a centred content area,
 // the same structure as a company-data platform rather than an admin sidebar.
@@ -76,7 +77,7 @@ export function AppShell({
             <Link href="/dashboard" className="flex items-center gap-2.5">
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white">DL</span>
               <span className="leading-tight">
-                <span className="block text-[15px] font-bold tracking-tight text-slate-900">DIRECTOR.LTD</span>
+                <span className="block text-[15px] font-bold tracking-tight text-slate-900">DIRECTOR<BrandDot />LTD</span>
                 <span className="block text-[10px] font-medium uppercase tracking-wider text-slate-500">UK company intelligence</span>
               </span>
             </Link>
@@ -126,7 +127,7 @@ export function AppShell({
           <div className="absolute inset-0 bg-slate-900/40" onClick={() => setMobileOpen(false)} />
           <div className="absolute inset-y-0 left-0 flex w-72 flex-col bg-white shadow-xl">
             <div className="flex h-14 items-center justify-between border-b border-slate-200 px-4">
-              <span className="text-sm font-bold text-slate-900">DIRECTOR.LTD</span>
+              <span className="text-sm font-bold text-slate-900">DIRECTOR<BrandDot />LTD</span>
               <button onClick={() => setMobileOpen(false)} aria-label="Close menu" className="rounded-md p-1.5 hover:bg-slate-100">
                 <X className="h-5 w-5 text-slate-500" />
               </button>
@@ -138,6 +139,13 @@ export function AppShell({
 
       {/* One shared content column for header, nav and every page: centred, max 1480px, responsive gutters. Wide tables scroll inside their own wrapper. */}
       <main className="app-container py-6 sm:py-8">{children}</main>
+
+      {/* Signed-in users can always reach the cookie policy (it lists the sign-in cookie and the browser storage this app uses). Only necessary cookies are used inside the app, so there is no banner, just the link. */}
+      <footer className="app-container pb-6 text-xs text-slate-500">
+        <Link href="/cookie-policy" className="font-medium text-slate-600 underline underline-offset-2 hover:text-indigo-700 focus-ring">
+          Cookie policy
+        </Link>
+      </footer>
     </div>
   );
 }

@@ -68,7 +68,7 @@ export async function exportReportDocument(session: SessionPayload, input: Docum
   const checked = parseFilter(rawFilter);
   if (!checked.ok) return NextResponse.json({ error: "Invalid filter.", details: checked.errors.slice(0, 10) }, { status: 400 });
   const activeRules = checked.filter ? countActiveRules(checked.filter) : 0;
-  if (session.role === "USER" && activeRules === 0) {
+  if ((session.role === "USER" || session.role === "CUSTOMER") && activeRules === 0) {
     return NextResponse.json({ error: "Add at least one filter before exporting - exporting the entire register is not available." }, { status: 403 });
   }
 

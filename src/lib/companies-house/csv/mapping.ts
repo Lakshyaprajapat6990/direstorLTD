@@ -1,4 +1,5 @@
 import { isBlankDate, parseUkDate } from "./dates";
+import { isNonUkCompany, NON_UK_REASON } from "../eligibility";
 
 // ---------------------------------------------------------------------------
 // The ONE place the Companies House "Free Company Data Product" CSV is
@@ -171,10 +172,13 @@ export interface MappingStats {
   unknownCategories: Record<string, number>;
   unknownAccountCategories: Record<string, number>;
   invalidOptionalDates: number;
+  // Rows left out because they are not UK companies (overseas entities, overseas companies, UK establishments). Not a failure and
+  // not a rejection: the file legitimately contains them. Absent in the stats of runs made before the UK-only rule.
+  nonUkExcluded?: number;
 }
 
 export function emptyMappingStats(): MappingStats {
-  return { unknownStatuses: {}, unknownCategories: {}, unknownAccountCategories: {}, invalidOptionalDates: 0 };
+  return { unknownStatuses: {}, unknownCategories: {}, unknownAccountCategories: {}, invalidOptionalDates: 0, nonUkExcluded: 0 };
 }
 
 function bump(map: Record<string, number>, key: string) {
@@ -182,7 +186,7 @@ function bump(map: Record<string, number>, key: string) {
   if (key in map || Object.keys(map).length < 50) map[key] = (map[key] ?? 0) + 1;
 }
 
-export type MapResult = { ok: true; row: CompanyCsvRow } | { ok: false; reason: string; companyNumber?: string };
+export type MapResult = { ok: true; row: CompanyCsvRow } | { ok: false; reason: string; companyNumber?: string; ineligible?: true };
 
 function clean(v: string | undefined): string {
   return (v ?? "").trim();
@@ -203,6 +207,9 @@ export function mapCsvRecord(record: Record<string, string>, stats: MappingStats
   if (!/^[A-Z0-9]{6,10}$/.test(companyNumber)) {
     return { ok: false, reason: `invalid company number "${companyNumber.slice(0, 20)}"`, companyNumber: companyNumber || undefined };
   }
+  // UK companies only: an overseas entity / overseas company / UK establishment is excluded here, by number prefix (the bulk
+  // file's "Other company type" hides the type of overseas companies), and again below by company type.
+  if (isNonUkCompany({ companyNumber })) return { ok: false, reason: NON_UK_REASON, companyNumber, ineligible: true };
   const name = clean(record[COL.name]);
   if (!name) return { ok: false, reason: "missing company name", companyNumber };
 
@@ -251,6 +258,7 @@ export function mapCsvRecord(record: Record<string, string>, stats: MappingStats
     type = slugify(rawCategory) || "unknown";
     bump(stats.unknownCategories, rawCategory || "(blank)");
   }
+  if (isNonUkCompany({ companyNumber, type })) return { ok: false, reason: NON_UK_REASON, companyNumber, ineligible: true };
 
   const rawAccountCategory = clean(record[COL.accountCategory]);
   const accountKey = rawAccountCategory.toLowerCase();

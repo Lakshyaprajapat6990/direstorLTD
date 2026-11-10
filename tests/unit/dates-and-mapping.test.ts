@@ -171,13 +171,15 @@ const REAL_STATUSES = [
 const REAL_CATEGORIES = [
   "Private Limited Company", "PRI/LTD BY GUAR/NSC (Private, limited by guarantee, no share capital)", "Limited Partnership",
   "Limited Liability Partnership", "Community Interest Company", "Charitable Incorporated Organisation",
-  "PRI/LBG/NSC (Private, Limited by guarantee, no share capital, use of 'Limited' exemption)", "Overseas Entity", "Other company type",
+  "PRI/LBG/NSC (Private, Limited by guarantee, no share capital, use of 'Limited' exemption)", "Other company type",
   "Registered Society", "Scottish Charitable Incorporated Organisation", "Private Unlimited Company", "Public Limited Company",
   "Royal Charter Company", "Investment Company with Variable Capital", "United Kingdom Economic Interest Grouping", "Scottish Partnership",
   "Industrial and Provident Society", "Private Unlimited", "Investment Company with Variable Capital(Umbrella)", "Old Public Company",
   "PRIV LTD SECT. 30 (Private limited company, section 30 of the Companies Act)", "Investment Company with Variable Capital (Securities)",
   "United Kingdom Societas", "Protected Cell Company", "Other Company Type", "Further Education and Sixth Form College Corps", "Converted/Closed",
 ];
+// "Overseas Entity" is a real category in the file too, but it is not a UK company: it is recognised and deliberately left out
+// (see tests/unit/uk-only-eligibility.test.ts), so it is not in the list of categories that must map to a stored row.
 const REAL_ACCOUNT_CATEGORIES = [
   "MICRO ENTITY", "NO ACCOUNTS FILED", "TOTAL EXEMPTION FULL", "DORMANT", "UNAUDITED ABRIDGED", "FULL", "SMALL", "AUDIT EXEMPTION SUBSIDIARY",
   "GROUP", "TOTAL EXEMPTION SMALL", "MEDIUM", "ACCOUNTS TYPE NOT AVAILABLE", "AUDITED ABRIDGED", "FILING EXEMPTION SUBSIDIARY", "PARTIAL EXEMPTION", "INITIAL",

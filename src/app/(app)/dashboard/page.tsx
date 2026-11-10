@@ -12,7 +12,10 @@ import { formatDate, formatDateOnly } from "@/lib/data/format";
 import { getRegisterBreakdown } from "@/lib/data/companies";
 import { listRecentlyViewed } from "@/lib/data/recently-viewed";
 import { effectiveStatus } from "@/lib/jobs/runs";
+import { dailyUpdateFreshness } from "@/lib/jobs/display";
 import { describeFilter } from "@/lib/filters/describe";
+import { loadProfile } from "@/lib/customer/profile-store";
+import { CompleteProfilePrompt } from "@/components/customer/CompleteProfilePrompt";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -52,6 +55,9 @@ export default async function DashboardPage() {
       listRecentlyViewed(userId, 8),
     ]);
 
+  // Customers with no optional details yet get a small dismissible reminder (never a redirect or a block).
+  const showProfilePrompt = session.role === "CUSTOMER" && !Object.values((await loadProfile(userId)).values).some(Boolean);
+
   const realCompanies = register.total;
   const streamStatus = streamRun ? effectiveStatus(streamRun) : "never";
   // When the company data was last synchronised from Companies House (monthly file / new-registrations sync).
@@ -82,11 +88,13 @@ export default async function DashboardPage() {
     return p === 0 ? "0%" : p < 0.01 ? "<0.01%" : p < 10 ? `${p.toFixed(2)}%` : `${p.toFixed(1)}%`;
   };
 
-  const registerTiles: { label: string; value: number; icon: typeof Building2; href?: string; kpi: Kpi; share?: boolean }[] = [
-    { label: "UK companies on the register", value: register.total, icon: Building2, href: "/companies", kpi: "blue" },
-    { label: "Active", value: register.active, icon: CheckCircle2, kpi: "green", share: true },
-    { label: "Dissolved", value: register.dissolved, icon: XCircle, kpi: "red", share: true },
-    { label: "With confirmed director data", value: register.directorsConfirmed, icon: Users, kpi: "violet", share: true },
+  // Active / Dissolved bars are each status as a share of ALL UK companies (status mix, not import progress). The director bar is a
+  // different measure - coverage: companies with confirmed director data / all UK companies. The wording beside each bar says which.
+  const registerTiles: { label: string; value: number; icon: typeof Building2; href?: string; kpi: Kpi; share?: boolean; shareText?: string; shareAria?: string; note?: string }[] = [
+    { label: "UK companies on the register", value: register.total, icon: Building2, href: "/companies", kpi: "blue", note: "Companies House register" },
+    { label: "Active", value: register.active, icon: CheckCircle2, kpi: "green", share: true, shareText: "of total UK companies", shareAria: "of total UK companies" },
+    { label: "Dissolved", value: register.dissolved, icon: XCircle, kpi: "red", share: true, shareText: "of total UK companies", shareAria: "of total UK companies" },
+    { label: "With confirmed director data", value: register.directorsConfirmed, icon: Users, kpi: "violet", share: true, shareText: "director data coverage", shareAria: "of UK companies have confirmed director data (coverage; fetch in progress)" },
   ];
   // Each tile links to an area with its own permission; people without it do not see a tile that leads nowhere.
   const allTiles: { label: string; value: number; icon: typeof Star; href: string; alert?: string; tone: keyof typeof CRM; show: boolean }[] = [
@@ -101,7 +109,8 @@ export default async function DashboardPage() {
 
   // Presentation of the EXISTING status values only: live = green, not yet run = amber, failed = red.
   const streamTone = streamStatus === "running" ? "green" : streamStatus === "never" ? "slate" : streamStatus === "failed" ? "red" : "amber";
-  const dailyTone = lastDaily?.finishedAt ? "green" : "amber";
+  const daily = dailyUpdateFreshness(lastDaily?.finishedAt);
+  const dailyTone = daily.tone; // amber when it has never run, or when the last successful run is more than a day and a half old
   const healthy = streamTone === "green" && dailyTone === "green";
   const DOT = { green: "bg-emerald-400", amber: "bg-amber-400", red: "bg-red-400", slate: "bg-slate-400" } as const;
 
@@ -125,6 +134,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="w-full space-y-5">
+      {showProfilePrompt && <CompleteProfilePrompt />}
       {/* ---------------- HERO ---------------- */}
       <header
         className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-950 via-indigo-900 to-indigo-700 px-6 py-8 text-white shadow-lg shadow-indigo-950/20 sm:px-10 sm:py-10"
@@ -188,7 +198,7 @@ export default async function DashboardPage() {
 
       {/* ---------------- REGISTER METRICS ---------------- */}
       <section aria-label="UK company register" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {registerTiles.map(({ label, value, icon: Icon, href, kpi, share: showShare }) => {
+        {registerTiles.map(({ label, value, icon: Icon, href, kpi, share: showShare, shareText, shareAria, note }) => {
           const c = KPI[kpi];
           const body = (
             <div className={`relative h-full overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br ${c.tint} to-white p-4 shadow-sm transition-shadow hover:shadow-md`}>
@@ -199,23 +209,26 @@ export default async function DashboardPage() {
                 </span>
                 <p className="mt-3 text-[28px] font-bold leading-none tabular-nums tracking-tight text-slate-900 sm:text-3xl">{value.toLocaleString()}</p>
                 <p className="mt-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</p>
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
                   {showShare ? (
                     <>
-                      <span className={`h-1.5 flex-1 overflow-hidden rounded-full ${c.track}`} role="img" aria-label={`${shareLabel(value)} of the register`}>
+                      <span className={`h-1.5 min-w-[56px] flex-1 overflow-hidden rounded-full ${c.track}`} role="img" aria-label={`${shareLabel(value)} ${shareAria ?? "of UK companies"}`}>
                         <span className={`block h-full rounded-full ${c.bar}`} style={{ width: `${Math.max(share(value), share(value) > 0 ? 1.5 : 0)}%` }} />
                       </span>
-                      <span className={`text-[11px] font-semibold tabular-nums ${c.text}`}>{shareLabel(value)}</span>
+                      <span className={`whitespace-nowrap text-[11px] font-semibold tabular-nums ${c.text}`}>
+                        {shareLabel(value)}
+                        {shareText && <span className="font-medium"> {shareText}</span>}
+                      </span>
                     </>
                   ) : (
-                    <span className={`text-[11px] font-semibold ${c.text}`}>Companies House register</span>
+                    <span className={`text-[11px] font-semibold ${c.text} group-hover:underline`}>{note ?? "Companies House register"}</span>
                   )}
                 </div>
               </div>
             </div>
           );
           return href ? (
-            <Link key={label} href={href} className="block">
+            <Link key={label} href={href} className="group block">
               {body}
             </Link>
           ) : (
@@ -318,7 +331,7 @@ export default async function DashboardPage() {
             {(
               [
                 ["Companies House register", `${realCompanies.toLocaleString()} companies loaded`, "green"],
-                ["Last automatic daily update", lastDaily?.finishedAt ? formatDate(lastDaily.finishedAt) : "Has not run yet", dailyTone],
+                ["Last automatic daily update", lastDaily?.finishedAt ? `${formatDate(lastDaily.finishedAt)}${daily.overdue ? " · overdue" : ""}` : "Has not run yet", dailyTone],
                 ["Live filing stream", streamStatus === "running" ? "Connected" : streamStatus === "never" ? "Not started" : streamStatus, streamTone],
                 ["Last filing event received", checkpoint?.lastEventAt ? formatDate(checkpoint.lastEventAt) : "—", checkpoint?.lastEventAt ? "green" : "slate"],
               ] as const

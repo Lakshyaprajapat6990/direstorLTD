@@ -4,17 +4,19 @@ import { can, type PermissionKey } from "@/lib/auth/permissions";
 import type { UserRole } from "@/lib/types";
 
 // Section bar at the top of the Super Admin / team-management area. Overview and Column settings are the original
-// Super Admin tabs, unchanged; Staff, Activity & reports and Timesheets appear for anyone holding the matching
+// Super Admin tabs, unchanged (Website Content, also Super Admin only, follows them); Staff, Activity & reports and Timesheets appear for anyone holding the matching
 // permission (a supervisor sees only the tabs they may use, and only their own team's data inside them).
 const TABS: { key: string; href: string; label: string; superOnly?: boolean; permission?: PermissionKey }[] = [
   { key: "overview", href: "/admin", label: "Overview", superOnly: true },
   { key: "staff", href: "/admin/staff", label: "Staff", permission: "staff.view" },
   { key: "activity", href: "/admin/activity", label: "Activity & reports", permission: "staff.activity" },
   { key: "timesheets", href: "/admin/timesheets", label: "Timesheets", permission: "timesheets.approve" },
+  { key: "customers", href: "/admin/customers", label: "Customers", superOnly: true },
   { key: "columns", href: "/admin/columns", label: "Column & Default Settings", superOnly: true },
+  { key: "content", href: "/admin/website-content", label: "Website Content (CMS)", superOnly: true },
 ];
 
-export type AdminTabKey = "overview" | "staff" | "activity" | "timesheets" | "columns";
+export type AdminTabKey = "overview" | "staff" | "activity" | "timesheets" | "customers" | "columns" | "content";
 
 export function AdminTabs({ active, viewer }: { active: AdminTabKey; viewer?: { role: UserRole; permissions: readonly string[] } }) {
   // Existing callers are Super Admin-only pages and pass no viewer.

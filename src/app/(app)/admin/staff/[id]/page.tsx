@@ -28,7 +28,7 @@ export const metadata: Metadata = { title: "Staff profile" };
 
 type SP = { period?: string; anchor?: string; from?: string; to?: string; cat?: string; session?: string; page?: string };
 const PAGE_SIZE = 25;
-const ROLE_LABEL = { USER: "User", ADMIN: "Admin", SUPER_ADMIN: "Super Admin" } as const;
+const ROLE_LABEL = { USER: "User", ADMIN: "Admin", SUPER_ADMIN: "Super Admin", CUSTOMER: "Customer" } as const;
 
 const fmt = (d: Date | null | undefined, tz: string) =>
   d ? d.toLocaleString("en-GB", { timeZone: tz, day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";

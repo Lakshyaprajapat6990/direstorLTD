@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { chRestGet, CompaniesHouseBreakerOpenError, CompaniesHouseRateLimitError } from "./client";
 import { parseChDate } from "./csv/dates";
 import { normalisePostcode } from "./csv/mapping";
+import { isNonUkCompany } from "./eligibility";
 import { classifyRun, ErrorSampler, finishRun, startRun, touchRun } from "@/lib/jobs/runs";
 
 // New-registration sync: keeps the register current BETWEEN the monthly bulk files.
@@ -89,7 +90,9 @@ export function daysBetween(from: string, to: string): string[] {
 }
 
 // Pure: a search hit as a Company row, or the reason it cannot be stored.
-export function mapSearchItem(item: AdvancedSearchItem): { ok: true; data: Prisma.CompanyCreateManyInput } | { ok: false; reason: string } {
+export function mapSearchItem(item: AdvancedSearchItem): { ok: true; data: Prisma.CompanyCreateManyInput } | { ok: false; reason: string; ineligible?: true } {
+  // UK companies only (see eligibility.ts): overseas entities, overseas companies and UK establishments registered that day are left out.
+  if (isNonUkCompany({ companyNumber: item.company_number, type: item.company_type })) return { ok: false, reason: "not a UK company", ineligible: true };
   const incorporationDate = parseChDate(item.date_of_creation);
   if (!incorporationDate) return { ok: false, reason: "missing/invalid date_of_creation" };
   if (!item.company_number || !item.company_name || !item.company_status || !item.company_type) return { ok: false, reason: "missing required field" };
@@ -147,11 +150,13 @@ async function storeDay(day: string, signal?: AbortSignal) {
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
+  let ineligible = 0;
   const samples = new ErrorSampler(10);
   const mapped: Prisma.CompanyCreateManyInput[] = [];
   items.forEach((item, i) => {
     const m = mapSearchItem(item);
     if (m.ok) mapped.push(m.data);
+    else if (m.ineligible) ineligible++; // not a UK company: left out by design, not a skipped/failed row
     else {
       skipped++;
       samples.add(i, m.reason, item.company_number);
@@ -193,7 +198,7 @@ async function storeDay(day: string, signal?: AbortSignal) {
       updated++;
     }
   }
-  return { read: items.length, inserted, updated, skipped, samples: samples.toJson() };
+  return { read: items.length, inserted, updated, skipped, ineligible, samples: samples.toJson() };
 }
 
 async function resumePoint(): Promise<{ lastCovered: string | null; bulkSnapshot: string | null }> {
@@ -244,7 +249,7 @@ export async function syncNewRegistrations(options: NewRegistrationsOptions = {}
       daysCovered++;
       // The checkpoint is "the last day fully stored": it only ever advances over contiguous, completed days.
       await touchRun(run.id, { checkpoint: day, rowsRead: totals.read, rowsInserted: totals.inserted, rowsUpdated: totals.updated, rowsSkipped: totals.skipped, rowsProcessed: totals.inserted + totals.updated });
-      log(`  ${day}: ${r.read} read, ${r.inserted} new, ${r.updated} refreshed${r.skipped ? `, ${r.skipped} skipped` : ""}`);
+      log(`  ${day}: ${r.read} read, ${r.inserted} new, ${r.updated} refreshed${r.skipped ? `, ${r.skipped} skipped` : ""}${r.ineligible ? `, ${r.ineligible} not UK (excluded)` : ""}`);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       if (err instanceof CompaniesHouseBreakerOpenError) error = `Companies House unavailable: ${error}`;

@@ -28,6 +28,7 @@ export const OFFICER_PRIORITY = {
   FILTER: 3, // ad-hoc director-filter workflow
   REFRESH: 4, // stale / dirty confirmed data
   CRAWL: 5, // general background crawl
+  PREFETCH: 5, // capped prefetch of the companies on a search page (lowest queue priority; see officerTriggers.ts)
 } as const;
 export type OfficerPriority = (typeof OFFICER_PRIORITY)[keyof typeof OFFICER_PRIORITY];
 
@@ -41,6 +42,8 @@ export interface OfficerQueueConfig {
   staleAfterDays: number; // confirmed data older than this is "stale" and re-fetched by the TTL sweep
   softRefreshDays: number; // detail-page view older than this triggers a background refresh
   unavailableRecheckDays: number;
+  // Most Companies House requests the officer worker may spend per UTC day (queue + crawl together). 0 = no cap.
+  dailyRequestCap: number;
 }
 
 const MIN = 60_000;
@@ -48,6 +51,8 @@ const HOUR = 60 * MIN;
 
 export function loadOfficerConfig(env: NodeJS.ProcessEnv = process.env): OfficerQueueConfig {
   const n = (name: string, d: number) => (Number.isFinite(Number(env[name])) && Number(env[name]) > 0 ? Number(env[name]) : d);
+  const rawCap = env.OFFICER_DAILY_REQUEST_CAP?.trim();
+  const dailyCap = rawCap && Number.isInteger(Number(rawCap)) && Number(rawCap) >= 0 ? Number(rawCap) : 10_000;
   return {
     leaseMs: n("OFFICER_LEASE_MINUTES", 5) * MIN,
     maxAttempts: n("OFFICER_MAX_ATTEMPTS", 6),
@@ -58,6 +63,8 @@ export function loadOfficerConfig(env: NodeJS.ProcessEnv = process.env): Officer
     staleAfterDays: n("OFFICER_STALE_AFTER_DAYS", 180),
     softRefreshDays: n("OFFICER_SOFT_REFRESH_DAYS", 30),
     unavailableRecheckDays: n("OFFICER_UNAVAILABLE_RECHECK_DAYS", 90),
+    // Conservative default; OFFICER_DAILY_REQUEST_CAP=0 removes the cap. Not read through n(): 0 is a valid value.
+    dailyRequestCap: dailyCap,
   };
 }
 
@@ -339,7 +346,9 @@ export async function saveCrawlCursor(phase: CrawlPhase, lastId: string, passes?
 // already exist - retrying or parked - are owned by the queue). Active
 // companies are walked first. The WHERE literals match the partial indexes.
 async function crawlPage(phase: CrawlPhase, afterId: string, limit: number): Promise<CrawlItem[]> {
-  const statusCond = phase === "active" ? `c."status" = 'active'` : `c."status" <> 'active'`;
+  // The second phase covers live-but-not-active companies (liquidation, administration, ...). Dissolved companies are
+  // deliberately excluded: they are fetched on demand only (view / follow / save / red-flag / report), never by the crawl.
+  const statusCond = phase === "active" ? `c."status" = 'active'` : `c."status" <> 'active' AND c."status" <> 'dissolved'`;
   return db.$queryRawUnsafe<CrawlItem[]>(
     `SELECT c."id", c."companyNumber" FROM "Company" c
       WHERE c."officersCoverage" = 'none' AND c."source" <> 'seed' AND ${statusCond} AND c."id" > $1
@@ -377,15 +386,24 @@ export async function selectCrawlBatch(limit: number): Promise<CrawlSelection> {
 // ---------------------------------------------------------------------------
 // Queue orchestration used by dailyUpdate / reports / the UI
 // ---------------------------------------------------------------------------
-export async function enqueueFollowedCompanies(cap: number = loadOfficerConfig().enqueueCap): Promise<EnqueueResult> {
+// Companies a person has marked to keep an eye on: followed, saved or red-flagged (and not in their trash). The state routes
+// queue these the moment the marker is set; this nightly pass is the safety net for markers set before that existed and for
+// any queue attempt that failed. Idempotent: a company already queued keeps its highest priority.
+export async function enqueueTrackedCompanies(cap: number = loadOfficerConfig().enqueueCap): Promise<EnqueueResult> {
   const rows = await db.userCompanyState.findMany({
-    where: { followed: true, company: { officersCoverage: "none", source: { not: "seed" } } },
+    where: {
+      trashed: false,
+      OR: [{ followed: true }, { saved: true }, { redFlagged: true }],
+      company: { officersCoverage: "none", source: { not: "seed" } },
+    },
     select: { companyId: true },
     distinct: ["companyId"],
     take: cap + 1,
   });
-  return enqueueOfficerJobs(rows.map((r) => r.companyId), { priority: OFFICER_PRIORITY.FOLLOWED, reason: "followed", cap });
+  return enqueueOfficerJobs(rows.map((r) => r.companyId), { priority: OFFICER_PRIORITY.FOLLOWED, reason: "tracked", cap });
 }
+// Former name, kept so existing callers and tests keep working.
+export const enqueueFollowedCompanies = enqueueTrackedCompanies;
 
 // Companies with confirmed-dirty officer data, then confirmed data past the
 // TTL, then unavailable data due a re-check. Bounded per call.

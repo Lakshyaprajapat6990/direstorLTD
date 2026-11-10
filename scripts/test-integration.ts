@@ -59,7 +59,7 @@ async function main() {
     if (mig.status !== 0) throw new Error("migrate deploy failed");
 
     const authSecret = randomBytes(48).toString("base64url");
-    const common = { AUTH_SECRET: authSecret, TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("hex"), TRUST_PROXY: "1" };
+    const common = { AUTH_SECRET: authSecret, TOKEN_ENCRYPTION_KEY: randomBytes(32).toString("hex"), TRUST_PROXY: "1", RESEND_API_KEY: "", EMAIL_FROM: "", APP_URL: "", RESEND_API_URL: "" }; // blank on purpose: next start would otherwise read a developer's real .env.local
     // Google Calendar: the first two servers are deliberately NOT configured (whatever the developer's .env says), the third
     // is configured with fake credentials so the connect / callback flow can be tested without talking to Google.
     const noGoogle = { GOOGLE_CALENDAR_CLIENT_ID: "", GOOGLE_CALENDAR_CLIENT_SECRET: "", GOOGLE_CALENDAR_REDIRECT_URI: "" };
@@ -68,19 +68,32 @@ async function main() {
       GOOGLE_CALENDAR_CLIENT_SECRET: "test-client-secret",
       GOOGLE_CALENDAR_REDIRECT_URI: "http://127.0.0.1:3213/api/calendar/callback/google",
     };
-    servers.push(startServer(3211, { ...common, ...noGoogle, SEED_DATA_VISIBLE: "true", EXPORT_MAX_ROWS_USER: "50", EXPORT_MAX_ROWS_ADMIN: "500" }));
-    servers.push(startServer(3212, { ...common, ...noGoogle, SEED_DATA_VISIBLE: "false" }));
+    // Password recovery: :3211 sends mail to the SMTP sink that tests/integration/password-recovery.test.ts runs on 127.0.0.1:2526
+    // (a real SMTP conversation, but to a local test listener, not a mailbox). :3212 has no mail configured at all.
+    const smtp = { SMTP_HOST: "127.0.0.1", SMTP_PORT: "2526", SMTP_SECURE: "false", SMTP_REQUIRE_TLS: "false", SMTP_USER: "", SMTP_PASS: "", MAIL_FROM: "DIRECTOR.LTD <no-reply@test.example>", APP_BASE_URL: "http://127.0.0.1:3211" };
+    const noSmtp = { SMTP_HOST: "", MAIL_FROM: "", APP_BASE_URL: "" };
+    servers.push(startServer(3211, { ...common, ...noGoogle, ...smtp, SEED_DATA_VISIBLE: "true", EXPORT_MAX_ROWS_USER: "50", EXPORT_MAX_ROWS_ADMIN: "500" }));
+    servers.push(startServer(3212, { ...common, ...noGoogle, ...noSmtp, SEED_DATA_VISIBLE: "false" }));
     servers.push(startServer(3213, { ...common, ...fakeGoogle, SEED_DATA_VISIBLE: "true" }));
-    await Promise.all([waitForHttp("http://127.0.0.1:3211/login"), waitForHttp("http://127.0.0.1:3212/login"), waitForHttp("http://127.0.0.1:3213/login")]);
+    // :3214 sends through the Resend integration, pointed at the mock Resend API that tests/integration/password-recovery-resend.test.ts runs on 127.0.0.1:2527.
+    const resend = { RESEND_API_KEY: "re_test_key_not_real", EMAIL_FROM: "DIRECTOR.LTD <onboarding@resend.dev>", APP_URL: "http://127.0.0.1:3214", RESEND_API_URL: "http://127.0.0.1:2527" };
+    servers.push(startServer(3214, { ...common, ...noGoogle, ...noSmtp, ...resend, SEED_DATA_VISIBLE: "false" }));
+    await Promise.all([waitForHttp("http://127.0.0.1:3211/login"), waitForHttp("http://127.0.0.1:3212/login"), waitForHttp("http://127.0.0.1:3213/login"), waitForHttp("http://127.0.0.1:3214/login")]);
 
     const files = fs.readdirSync("tests/integration").filter((f) => f.endsWith(".test.ts")).map((f) => path.join("tests/integration", f));
     const only = process.argv[2];
-    const run = spawnSync(isWin ? "npx.cmd" : "npx", ["tsx", "--test", "--test-concurrency=1", ...(only ? files.filter((f) => f.includes(only)) : files)], {
-      env: { ...process.env, DATABASE_URL: dbUrl, TEST_BASE_URL: "http://127.0.0.1:3211", TEST_BASE_URL_PROD: "http://127.0.0.1:3212", TEST_BASE_URL_GOOGLE: "http://127.0.0.1:3213", ...common },
-      stdio: "inherit",
-      shell: isWin,
+    // Asynchronous on purpose: waiting synchronously would freeze this process's event loop for the whole run, and with it the
+    // reading of the throw-away PostgreSQL's and the app servers' output pipes. Once enough had been logged (the suites provoke
+    // many deliberate database errors) a pipe filled, the database blocked writing its log, and the whole run hung.
+    exitCode = await new Promise<number>((resolve) => {
+      const child = spawn(isWin ? "npx.cmd" : "npx", ["tsx", "--test", "--test-concurrency=1", ...(only ? files.filter((f) => f.includes(only)) : files)], {
+        env: { ...process.env, DATABASE_URL: dbUrl, TEST_BASE_URL: "http://127.0.0.1:3211", TEST_BASE_URL_PROD: "http://127.0.0.1:3212", TEST_BASE_URL_GOOGLE: "http://127.0.0.1:3213", TEST_BASE_URL_RESEND: "http://127.0.0.1:3214", ...common },
+        stdio: "inherit",
+        shell: isWin,
+      });
+      child.on("exit", (code) => resolve(code ?? 1));
+      child.on("error", () => resolve(1));
     });
-    exitCode = run.status ?? 1;
   } finally {
     for (const s of servers) {
       if (isWin && s.pid) spawnSync("taskkill", ["/pid", String(s.pid), "/T", "/F"], { stdio: "ignore" });

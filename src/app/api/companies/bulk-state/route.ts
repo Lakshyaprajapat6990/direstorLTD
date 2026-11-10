@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { denyUnless } from "@/lib/auth/require";
 import { resolveStatePatch, statePatchSchema } from "@/lib/data/company-state";
+import { queueTrackedCompanies } from "@/lib/companies-house/officerTriggers";
 
 // Bulk version of POST /api/companies/[id]/state for the rows selected on one
 // results page. Strictly the caller's own state; the cap matches the maximum
@@ -40,6 +41,9 @@ export async function POST(request: Request) {
     }),
     db.userCompanyState.updateMany({ where: { userId, companyId: { in: ids } }, data: next }),
   ]);
+
+  // Same as the single-company route: a follow / save / red-flag queues the officer data of the selected companies.
+  await queueTrackedCompanies(session, ids, next);
 
   // One event per company, so "which companies did this person work on" includes bulk changes (previously a single event
   // with only a count, which could not be attributed to any company). Same event type and wording as the single-company route.

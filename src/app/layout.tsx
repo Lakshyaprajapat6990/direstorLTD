@@ -12,13 +12,30 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Absolute base for the social-preview (Open Graph / Twitter) image URLs, from configuration: set APP_BASE_URL (or NEXTAUTH_URL) to the
+// real HTTPS address BEFORE building, otherwise previews would point at the wrong host. The icon, apple-icon and the 1200x630 preview
+// images are the files in this folder (icon.svg, favicon.ico, apple-icon.png, opengraph-image.png, twitter-image.png).
+function metadataBase(): URL | undefined {
+  try {
+    const raw = process.env.APP_BASE_URL || process.env.NEXTAUTH_URL;
+    return raw ? new URL(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const TITLE = "DIRECTOR.LTD — Companies House Intelligence Platform";
+const DESCRIPTION = "Search, filter and monitor Companies House company data. Build custom reports, track leads and manage follow-ups in one platform.";
+
 export const metadata: Metadata = {
+  metadataBase: metadataBase(),
   title: {
-    default: "DIRECTOR.LTD — Companies House Intelligence Platform",
+    default: TITLE,
     template: "%s — DIRECTOR.LTD",
   },
-  description:
-    "Search, filter and monitor the full Companies House dataset. Build custom reports, track leads and manage follow-ups in one platform.",
+  description: DESCRIPTION,
+  openGraph: { type: "website", siteName: "DIRECTOR.LTD", title: TITLE, description: DESCRIPTION },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

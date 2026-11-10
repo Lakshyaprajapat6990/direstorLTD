@@ -17,6 +17,7 @@ import { isRestConfigured } from "@/lib/companies-house/client";
 import { ensureDirectorsFetched } from "@/lib/companies-house/sync";
 import { maybeSoftRefresh } from "@/lib/companies-house/officerFreshness";
 import { loadOfficerConfig } from "@/lib/companies-house/officerQueue";
+import { queueFailedView } from "@/lib/companies-house/officerTriggers";
 import { officerFreshness } from "@/lib/data/director-display";
 import { profileFetchedAt } from "@/lib/columns/cellRules";
 import { recordCompanyView } from "@/lib/data/recently-viewed";
@@ -48,7 +49,9 @@ export default async function CompanyDetailPage({ params, searchParams }: { para
       if (!company) notFound();
     } catch {
       // Companies House unavailable/rate-limited — render with whatever
-      // director data we already have rather than breaking the page.
+      // director data we already have rather than breaking the page. The company is queued so the officer worker
+      // completes the fetch instead of waiting for the next view (idempotent; already-queued companies keep their priority).
+      await queueFailedView(id);
     }
   }
   if (!company) notFound();

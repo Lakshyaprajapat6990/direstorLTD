@@ -56,3 +56,13 @@ export async function loadLatestRuns(): Promise<RunView[]> {
     return { run, status, tone, detail: parts.join(" · ") };
   });
 }
+
+// How current the scheduled daily update is. It is due once a day (03:00 UTC by default) and is retried for a few hours when it
+// fails, so a successful run older than this means the scheduler has missed at least one day and the status must not read as healthy.
+export const DAILY_UPDATE_STALE_AFTER_MS = 36 * 3_600_000;
+
+export function dailyUpdateFreshness(finishedAt: Date | null | undefined, now: Date = new Date()): { tone: "green" | "amber"; overdue: boolean } {
+  if (!finishedAt || Number.isNaN(finishedAt.getTime())) return { tone: "amber", overdue: false }; // never run: amber, as before
+  const overdue = now.getTime() - finishedAt.getTime() > DAILY_UPDATE_STALE_AFTER_MS;
+  return { tone: overdue ? "amber" : "green", overdue };
+}

@@ -89,7 +89,7 @@ export async function POST(request: Request) {
 
   if (input.rateCurrency !== undefined && !isCurrency(input.rateCurrency)) return NextResponse.json({ error: "Unsupported currency." }, { status: 400 });
 
-  const weakness = validatePassword(input.password, { email: input.email });
+  const weakness = validatePassword(input.password, { email: input.email, name: input.name });
   if (weakness) return NextResponse.json({ error: weakness }, { status: 400 });
 
   const email = input.email.toLowerCase();

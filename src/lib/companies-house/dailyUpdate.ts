@@ -2,8 +2,8 @@ import { db } from "@/lib/db";
 import { buildCompanyWhere } from "@/lib/data/companies";
 import { isRestConfigured } from "./client";
 import { reconcilePendingFilingEvents } from "./filingEvents";
-import { enqueueFollowedCompanies, enqueueOfficerJobs, loadOfficerConfig, OFFICER_PRIORITY } from "./officerQueue";
-import { hasActiveDirectorRules } from "@/lib/filters/compile";
+import { enqueueTrackedCompanies, loadOfficerConfig } from "./officerQueue";
+import { enqueueReportOfficers, ownerCanSeeDirectors } from "./officerTriggers";
 import { finishRun, reconcileStaleRuns, startRun, touchRun } from "@/lib/jobs/runs";
 
 export interface DailyUpdateOptions {
@@ -91,25 +91,21 @@ export async function runDailyUpdate(options: DailyUpdateOptions = {}): Promise<
     // followed companies (P2). Idempotent: re-running never duplicates jobs and
     // keeps the highest priority.
     if (enqueueCap > 0) {
+      // Every daily-refresh report (not only those with a director rule): the people reading it see its companies' directors.
+      // Each owner's permission is checked once; priority REPORT, capped, active companies first.
       const reports = await db.report.findMany({ where: { dailyRefresh: true } });
+      const ownerOk = new Map<string, boolean>();
       for (const report of reports) {
         try {
-          const filter = JSON.parse(report.filterJson);
-          if (!hasActiveDirectorRules(filter)) continue;
-          const where = buildCompanyWhere({ filter, mode: "possible", userId: report.ownerId });
-          const candidates = await db.company.findMany({
-            where: { AND: [where, { officersCoverage: "none" }] },
-            select: { id: true },
-            orderBy: { id: "asc" },
-            take: enqueueCap + 1,
-          });
-          const queued = await enqueueOfficerJobs(candidates.map((c) => c.id), { priority: OFFICER_PRIORITY.REPORT, reason: "report", cap: enqueueCap });
-          result.officersQueuedForReports += queued.inserted;
+          if (!ownerOk.has(report.ownerId)) ownerOk.set(report.ownerId, await ownerCanSeeDirectors(report.ownerId));
+          if (!ownerOk.get(report.ownerId)) continue;
+          const queued = await enqueueReportOfficers(report, { cap: enqueueCap, ownerChecked: true });
+          result.officersQueuedForReports += queued.queued;
         } catch {
           /* a broken report must not stop the daily job; the refresh step below records its error */
         }
       }
-      result.officersQueuedForFollowed = (await enqueueFollowedCompanies(enqueueCap)).inserted;
+      result.officersQueuedForFollowed = (await enqueueTrackedCompanies(enqueueCap)).inserted;
       await touchRun(run.id);
     }
 

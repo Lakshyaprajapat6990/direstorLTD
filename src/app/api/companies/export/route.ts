@@ -78,7 +78,7 @@ export async function POST(request: Request) {
   const hasSearch = !!parsed.data.q?.trim() || !!parsed.data.namePrefix;
   // "all" is the default Companies view, not a narrowing: only followed / saved / red-flagged / trashed count as narrowed.
   const narrowedByScope = !!parsed.data.scope && parsed.data.scope !== "all";
-  if (session.role === "USER" && activeRules === 0 && !hasSearch && !narrowedByScope) {
+  if ((session.role === "USER" || session.role === "CUSTOMER") && activeRules === 0 && !hasSearch && !narrowedByScope) {
     return NextResponse.json(
       { error: "Add at least one filter or a search term before exporting - exporting the entire register is not available." },
       { status: 403 }

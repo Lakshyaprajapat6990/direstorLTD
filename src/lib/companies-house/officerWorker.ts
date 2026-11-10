@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { db } from "@/lib/db";
 import { classifyRun, finishRun, startRun, touchRun } from "@/lib/jobs/runs";
 import { CompaniesHouseApiError, CompaniesHouseBreakerOpenError, CompaniesHouseQuotaDeferredError, CompaniesHouseRateLimitError, isRestConfigured } from "./client";
 import { readBreaker } from "./breaker";
@@ -55,6 +56,8 @@ export function restartDelayMs(stopReason: OfficerWorkerStats["stopReason"] | "e
       return 0;
     case "idle":
       return 10 * 60_000;
+    case "daily_cap":
+      return 60 * 60_000; // re-check hourly; the cap resets at 00:00 UTC
     case "auth_breaker":
     case "no_credentials":
       return 15 * 60_000;
@@ -73,6 +76,7 @@ export interface OfficerWorkerOptions {
   queue?: boolean; // process queued jobs (default true)
   crawl?: boolean; // process the P5 background crawl (default FALSE: opt-in)
   priorityMax?: number; // only claim queued jobs with priority <= this
+  dailyRequestCap?: number; // override config.dailyRequestCap (0 = unlimited)
   freshness?: boolean; // enqueue dirty / TTL refreshes when idle (default true)
   exitWhenIdle?: boolean; // return instead of waiting when there is nothing to do
   idleSleepMs?: number;
@@ -96,7 +100,11 @@ export interface OfficerWorkerStats {
   expiredLeasesReleased: number;
   freshnessEnqueued: number;
   crawled: number;
-  stopReason: "limit" | "runtime" | "aborted" | "idle" | "auth_breaker" | "no_credentials";
+  dailyRequestCap: number; // the cap this run enforced (0 = none), so monitoring can show the cap the worker actually used
+  // Companies House requests this run sent (officer pages, plus the profile lookup behind an "unavailable" answer). A company
+  // with more officers than one page holds costs extra pages that are not counted, so this is a close lower bound.
+  requests: number;
+  stopReason: "limit" | "runtime" | "aborted" | "idle" | "auth_breaker" | "no_credentials" | "daily_cap";
   companiesPerMinute: number;
 }
 
@@ -125,6 +133,26 @@ function classify(err: unknown): Classified {
   return { kind: "failure", httpStatus: null, message };
 }
 
+// Companies House requests the officer worker has sent since 00:00 UTC, summed from the stats of its runs started today.
+// The current run is excluded (it counts its own requests live).
+export async function officerRequestsSpentToday(excludeRunId?: string, now: Date = new Date()): Promise<number> {
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const runs = await db.ingestionRun.findMany({
+    where: { kind: "officer_backfill", startedAt: { gte: dayStart }, ...(excludeRunId ? { id: { not: excludeRunId } } : {}) },
+    select: { statsJson: true },
+  });
+  let total = 0;
+  for (const r of runs) {
+    try {
+      const n = r.statsJson ? Number((JSON.parse(r.statsJson) as { requests?: number }).requests ?? 0) : 0;
+      if (Number.isFinite(n)) total += n;
+    } catch {
+      /* unreadable stats: counts as nothing */
+    }
+  }
+  return total;
+}
+
 export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Promise<OfficerWorkerStats> {
   const log = options.log ?? (() => {});
   const config = options.config ?? loadOfficerConfig();
@@ -137,7 +165,7 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
 
   const stats: OfficerWorkerStats = {
     workerId, claimed: 0, processed: 0, full: 0, unavailable: 0, failures: 0, parked: 0, systemicHandBacks: 0, quotaDeferrals: 0, http429s: 0,
-    expiredLeasesReleased: 0, freshnessEnqueued: 0, crawled: 0, stopReason: "idle", companiesPerMinute: 0,
+    expiredLeasesReleased: 0, freshnessEnqueued: 0, crawled: 0, dailyRequestCap: 0, requests: 0, stopReason: "idle", companiesPerMinute: 0,
   };
 
   if (!isRestConfigured()) {
@@ -171,6 +199,14 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
   const heartbeat = setInterval(beat, options.heartbeatMs ?? 30_000);
   heartbeat.unref?.();
 
+  // Requests the officer worker already spent today (UTC), from the stats of its earlier runs. The cap is a ceiling on the
+  // worker's own spending; the shared quota gate still decides when each request may actually be sent.
+  const dailyCap = options.dailyRequestCap ?? config.dailyRequestCap;
+  stats.dailyRequestCap = dailyCap;
+  const spentBeforeThisRun = dailyCap > 0 ? await officerRequestsSpentToday(run.id) : 0;
+  const capLeft = () => (dailyCap > 0 ? dailyCap - spentBeforeThisRun - stats.requests : Infinity);
+  if (dailyCap > 0) log(`daily request cap ${dailyCap}: ${spentBeforeThisRun} already spent today`);
+
   let lastFreshnessAt = 0;
   let fatal: unknown = null;
   let breakerMessage: string | null = null;
@@ -188,12 +224,18 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
       const outcome = await syncCompanyOfficers(item.companyId, item.companyNumber, { quotaClass: quotaClassForPriority(item.priority) });
       if (outcome.kind === "kept_confirmed") {
         // 404 for a company whose confirmed data we keep: a retryable failure, state untouched.
+        stats.requests += 1;
         await chargeFailure(item, 404, "officers 404 for an already-confirmed company; confirmed data kept", fromCrawl);
         return "ok";
       }
       stats.processed++;
-      if (outcome.kind === "full") stats.full++;
-      else stats.unavailable++;
+      if (outcome.kind === "full") {
+        stats.full++;
+        stats.requests += 1;
+      } else {
+        stats.unavailable++;
+        stats.requests += 2; // the officers 404 and the profile lookup that tells "no officer data" from "company gone"
+      }
       return "ok";
     } catch (err) {
       const c = classify(err);
@@ -214,7 +256,10 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
       if (systemic) {
         const wait = c.kind === "systemic" ? c.retryAfterMs : 30_000;
         stats.systemicHandBacks++;
-        if (c.kind === "systemic" && c.http429) stats.http429s++;
+        if (c.kind === "systemic" && c.http429) {
+          stats.http429s++;
+          stats.requests += 1;
+        }
         await releaseWorkerLeases(workerId);
         log(`systemic: ${c.kind === "systemic" ? c.reason : "outage breaker open"}; handing work back, pausing ${Math.round(wait / 1000)}s`);
         if (c.kind === "systemic" && c.authStop) {
@@ -226,6 +271,7 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
       }
       const message = c.kind === "systemic" ? c.reason : c.message;
       const httpStatus = c.kind === "systemic" ? null : c.httpStatus;
+      stats.requests += 1; // a company-specific failure is an answer Companies House sent
       await chargeFailure(item, httpStatus, message, fromCrawl);
       return "ok";
     }
@@ -254,6 +300,7 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
       if (stopped()) { stats.stopReason = "aborted"; break; }
       if (expired()) { stats.stopReason = "runtime"; break; }
       if (limitReached()) { stats.stopReason = "limit"; break; }
+      if (capLeft() <= 0) { stats.stopReason = "daily_cap"; break; }
 
       const gate = await authGate();
       if (gate === "stop") { stats.stopReason = "auth_breaker"; break; }
@@ -267,7 +314,7 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
       }
 
       const remaining = options.maxCompanies !== undefined ? options.maxCompanies - stats.processed : batchSize;
-      const take = Math.max(1, Math.min(batchSize, remaining));
+      const take = Math.max(1, Math.min(batchSize, remaining, capLeft()));
 
       // ---- queue (P1..P4) ----
       if (useQueue) {

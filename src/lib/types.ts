@@ -4,7 +4,8 @@
 // Postgres later can promote these to real Prisma enums without touching
 // application code.
 
-export type UserRole = "SUPER_ADMIN" | "ADMIN" | "USER";
+// CUSTOMER = a public self-registered account: no staff features and no permissions (see resolvePermissions).
+export type UserRole = "SUPER_ADMIN" | "ADMIN" | "USER" | "CUSTOMER";
 
 // The real Companies House `company_status` enum (confirmed against the
 // official api-enumerations reference — companieshouse/api-enumerations).

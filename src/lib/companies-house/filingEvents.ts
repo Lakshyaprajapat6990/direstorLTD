@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { syncCompanyProfile } from "./sync";
+import { NonUkCompanyError, syncCompanyProfile } from "./sync";
 import { CompaniesHouseNotFoundError, CompaniesHouseRateLimitError } from "./client";
 import type { QuotaClass } from "./quota";
 import { parseChDate } from "./csv/dates";
@@ -134,6 +134,11 @@ export async function applyFilingEvent(eventId: string, quotaClass: QuotaClass =
     return "applied";
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof NonUkCompanyError) {
+      // A filing for an overseas entity / overseas company: not ours to store. Closed for good, never retried, never stored.
+      await db.filingEvent.update({ where: { id: event.id }, data: { applyStatus: "ignored", lastError: message.slice(0, 500) } });
+      return "ignored";
+    }
     if (err instanceof CompaniesHouseNotFoundError) {
       // The company does not exist on the register (yet). Keep retrying a few
       // times via reconcile, but make the reason visible.

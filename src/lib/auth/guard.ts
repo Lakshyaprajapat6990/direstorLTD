@@ -4,6 +4,7 @@ import type { UserRole } from "@/lib/types";
 import { can, type PermissionKey } from "./permissions";
 
 const ROLE_RANK: Record<UserRole, number> = {
+  CUSTOMER: -1,
   USER: 0,
   ADMIN: 1,
   SUPER_ADMIN: 2,

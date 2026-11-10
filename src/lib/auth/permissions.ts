@@ -57,6 +57,11 @@ const ADMIN_ONLY: PermissionKey[] = ["staff.view", "staff.activity", "staff.mana
 // What a USER could do before permissions existed (unchanged behaviour for existing accounts).
 export const LEGACY_USER_PERMISSIONS: PermissionKey[] = ALL_PERMISSION_KEYS.filter((k) => !ADMIN_ONLY.includes(k) && k !== "reports.viewOthers");
 
+// Phase One: a self-registered customer gets every platform feature a USER has (search, Advanced Search, director data, reports,
+// exports, notes, calendar, watches / saved / red flags), without the staff work queue and timesheets. Fixed in code, never read from
+// the database, so no stored value can widen it; reports.viewOthers and every administration key stay out of reach.
+export const CUSTOMER_PERMISSIONS: PermissionKey[] = LEGACY_USER_PERMISSIONS.filter((k) => k !== "work.assigned" && k !== "timesheets.submit");
+
 // What an ADMIN could do before: everything a user can, see all reports, manage users.
 export const LEGACY_ADMIN_PERMISSIONS: PermissionKey[] = ALL_PERMISSION_KEYS;
 
@@ -111,6 +116,8 @@ export function withImplied(keys: Iterable<PermissionKey>): PermissionKey[] {
 
 export function resolvePermissions(role: UserRole, stored: string | null | undefined): PermissionKey[] {
   if (role === "SUPER_ADMIN") return [...ALL_PERMISSION_KEYS];
+  // A customer always gets the fixed Phase One set, whatever is stored (registration stores "[]"; a NULL list must never fall back to the USER set).
+  if (role === "CUSTOMER") return [...CUSTOMER_PERMISSIONS];
   const explicit = parsePermissions(stored);
   if (explicit) return withImplied(explicit);
   return role === "ADMIN" ? [...LEGACY_ADMIN_PERMISSIONS] : [...LEGACY_USER_PERMISSIONS];

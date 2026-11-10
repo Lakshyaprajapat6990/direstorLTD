@@ -26,6 +26,8 @@ export interface NavItem {
   minRole?: UserRole;
   // Shown only to someone holding at least one of these permissions (the pages and APIs enforce them regardless).
   anyPermission?: PermissionKey[];
+  // Shown ONLY to this role (the free customer area; its pages and APIs check the role themselves).
+  onlyRole?: UserRole;
   // Hidden for this role (a Super Admin reaches the same pages through the Super Admin tabs).
   hideForRole?: UserRole;
   // Rendered at the right-hand end of the header nav (account / administration).
@@ -58,6 +60,7 @@ export function visibleNavItems(viewer: { role: UserRole; permissions: readonly 
   return NAV_ITEMS.filter(
     (i) =>
       (!i.minRole || rank[viewer.role] >= rank[i.minRole]) &&
+      (!i.onlyRole || i.onlyRole === viewer.role) &&
       i.hideForRole !== viewer.role &&
       (!i.anyPermission || i.anyPermission.some((p) => can(viewer, p)))
   );

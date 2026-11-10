@@ -8,6 +8,8 @@ import { filterAccessResponse } from "@/lib/auth/access";
 import { buildCompanyWhere } from "@/lib/data/companies";
 import { parseFilter } from "@/lib/filters/validate";
 import { validateReportColumns, validateReportSort } from "@/lib/columns/store";
+import { can } from "@/lib/auth/permissions";
+import { enqueueReportOfficers } from "@/lib/companies-house/officerTriggers";
 
 export async function GET() {
   const session = await getSession();
@@ -78,6 +80,9 @@ export async function POST(request: Request) {
   });
 
   await logActivity(session, "report_created", { meta: { name: report.name }, reportId: report.id });
+
+  // Queue officer data for the companies this report matches (priority 1, capped; best effort).
+  if (can(session, "companies.directors")) await enqueueReportOfficers(report, { actor: session, ownerChecked: true });
 
   return NextResponse.json({ report });
 }

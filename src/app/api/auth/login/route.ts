@@ -2,10 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { verifyPassword, getDummyHash } from "@/lib/auth/password";
-import { createSessionToken, setSessionCookie } from "@/lib/auth/session";
-import { clearFailedLogins, clientIp, isLoginBlocked, recordFailedLogin } from "@/lib/auth/login-throttle";
+import { startSession } from "@/lib/auth/login-session";
+import { clientIp, isLoginBlocked, recordFailedLogin } from "@/lib/auth/login-throttle";
 import { logActivity } from "@/lib/activity";
-import type { UserRole } from "@/lib/types";
 
 const loginSchema = z.object({
   email: z.string().email().max(254),
@@ -49,24 +48,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: GENERIC_FAILURE }, { status: 401 });
   }
 
-  const now = new Date();
-  const [session] = await db.$transaction([
-    db.userSession.create({
-      data: { userId: user.id, startedAt: now, lastActivityAt: now, userAgent: request.headers.get("user-agent")?.slice(0, 200) ?? null },
-      select: { id: true },
-    }),
-    db.user.update({ where: { id: user.id }, data: { lastLoginAt: now } }),
-  ]);
-  const token = await createSessionToken({
-    userId: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role as UserRole,
-    sid: session.id,
-  });
-  await setSessionCookie(token);
-  await clearFailedLogins(email, ip);
-  await logActivity({ userId: user.id, sid: session.id }, "login");
-
+  await startSession(request, user, ip);
   return NextResponse.json({ ok: true });
 }
