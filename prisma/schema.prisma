@@ -321,6 +321,7 @@ model Company {
   recentViews  RecentlyViewed[]
   filingEvents FilingEvent[]
   officerJob   OfficerSyncJob?
+  dissolvedSample DissolvedSample?
   // Low-cardinality booleans use partial indexes + trigram (name) created in
   // the migration SQL (Prisma cannot express them). The officer-coverage
   // indexes (crawl, dirty, full/unavailable freshness, directorCount and
@@ -845,4 +846,27 @@ model SiteMedia {
   createdAt      DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// The random sample of never-checked DISSOLVED companies used to estimate the director records still to import for dissolved companies.
+// One row per sampled company. stratum = dissolution year (2009 = before 2010 or no date). frameSize = how many never-checked dissolved
+// companies the stratum had when the sample was drawn. records = director + LLP-member records found (0 when Companies House has no officer
+// data); only resolved rows (fetched / unavailable / already_checked) feed the estimate. kind "pilot" = the first 54 (3 per year).
+model DissolvedSample {
+  companyId String    @id
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  stratum   Int
+  kind      String
+  batch     String
+  frameSize Int
+  drawnAt   DateTime  @default(now())
+  status    String    @default("selected")
+  records   Int?
+  requests  Int       @default(0)
+  attempts  Int       @default(0)
+  claimedAt DateTime?
+  fetchedAt DateTime?
+  lastError String?
+
+  @@index([stratum, status])
 }

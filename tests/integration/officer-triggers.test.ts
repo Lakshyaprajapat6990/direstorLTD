@@ -354,3 +354,25 @@ test("worker daily cap: stops at the cap, remembers what earlier runs spent toda
   const unlimited = await runOfficerWorker({ dailyRequestCap: 0, exitWhenIdle: true, freshness: false, workerId: "w-cap-4", heartbeatMs: 200 });
   assert.notEqual(unlimited.stopReason, "daily_cap", "0 means no cap");
 });
+
+test("worker daily cap: a batch never starts another company once the cap is spent, even when each company costs two requests", async () => {
+  const { enqueueOfficerJobs } = await import("../../src/lib/companies-house/officerQueue");
+  const { runOfficerWorker } = await import("../../src/lib/companies-house/officerWorker");
+  const { resetSharedQuotaState } = await import("../../src/lib/companies-house/quota");
+  await resetSharedQuotaState();
+  await db.chBreaker.deleteMany();
+  await db.ingestionRun.deleteMany({ where: { kind: "officer_backfill" } });
+
+  // Every company answers "no officer data" (officers 404 + profile lookup = 2 requests), so a batch sized for ONE request per
+  // company (cap 3 -> 3 companies) would spend 6 requests if the cap were only checked between batches.
+  const cs = await Promise.all(Array.from({ length: 5 }, () => makeCompany({ companyNumber: num("U") })));
+  for (const c of cs) modes.set(c.companyNumber, "404");
+  await enqueueOfficerJobs(cs.map((c) => c.id), { priority: 1, reason: "report" });
+
+  const r = await runOfficerWorker({ dailyRequestCap: 3, exitWhenIdle: true, freshness: false, workerId: "w-cap-batch", heartbeatMs: 200 });
+  assert.equal(r.stopReason, "daily_cap");
+  assert.equal(r.processed, 2, "company 1 costs 2 (1 left), company 2 may start and costs 2 (cap spent); company 3 must NOT start");
+  assert.equal(r.requests, 4, "at most one company's worth over the cap, never a whole batch");
+  assert.equal(await db.officerSyncJob.count({ where: { status: "leased" } }), 0, "the claimed-but-not-started companies were handed back");
+  assert.ok((await db.officerSyncJob.count({ where: { status: "queued" } })) >= 3, "the unstarted companies are still queued, uncharged");
+});

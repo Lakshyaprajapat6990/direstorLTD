@@ -229,7 +229,7 @@ function LinkNote({ path }: { path: string }) {
         <Lock className="h-4 w-4 text-slate-500" aria-hidden /> Where this link goes
       </p>
       <p className="mt-1 text-slate-600">
-        <code className="rounded bg-white px-1">{href ?? "?"}</code> This link jumps to a section of this page. Its destination is part of the page's navigation and is controlled in code; the label and its look can be edited.
+        <code className="rounded bg-white px-1">{href ?? "?"}</code> This link jumps to a section of this page. Its destination is part of the page&apos;s navigation and is controlled in code; the label and its look can be edited.
       </p>
     </div>
   );

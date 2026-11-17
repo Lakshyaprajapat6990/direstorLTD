@@ -9,7 +9,9 @@ export const AVATAR_TYPES = { jpg: "image/jpeg", png: "image/png", webp: "image/
 export type AvatarExt = keyof typeof AVATAR_TYPES;
 const ID = /^[a-z0-9]{10,40}$/i;
 
-export const avatarDir = () => path.resolve(process.env.AVATAR_DIR || path.join(process.cwd(), "data", "avatars"));
+// The /*turbopackIgnore: true*/ hints stop the Turbopack build from tracing the WHOLE project directory because of these runtime-computed
+// paths (on a developer machine that directory can hold tens of GB of backups, which made `next build` run out of memory).
+export const avatarDir = () => path.resolve(/*turbopackIgnore: true*/ process.env.AVATAR_DIR || path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "avatars"));
 export const isUserId = (id: string) => ID.test(id);
 
 // JPEG / PNG / WebP by magic number; anything else (SVG, GIF, HTML, a renamed executable...) is refused.
@@ -20,13 +22,13 @@ export function detectImageType(b: Uint8Array): AvatarExt | null {
   return null;
 }
 
-const file = (userId: string, ext: AvatarExt) => path.join(avatarDir(), `${userId}.${ext}`);
+const file = (userId: string, ext: AvatarExt) => path.join(/*turbopackIgnore: true*/ avatarDir(), `${userId}.${ext}`);
 
 export async function findAvatar(userId: string): Promise<{ ext: AvatarExt; mtimeMs: number } | null> {
   if (!isUserId(userId)) return null;
   for (const ext of Object.keys(AVATAR_TYPES) as AvatarExt[]) {
     try {
-      const st = await fs.stat(file(userId, ext));
+      const st = await fs.stat(/*turbopackIgnore: true*/ file(userId, ext));
       return { ext, mtimeMs: Math.floor(st.mtimeMs) };
     } catch {
       /* not this extension */
@@ -36,7 +38,7 @@ export async function findAvatar(userId: string): Promise<{ ext: AvatarExt; mtim
 }
 
 export async function readAvatar(userId: string, ext: AvatarExt): Promise<Buffer> {
-  return fs.readFile(file(userId, ext));
+  return fs.readFile(/*turbopackIgnore: true*/ file(userId, ext));
 }
 
 export async function removeAvatar(userId: string): Promise<void> {

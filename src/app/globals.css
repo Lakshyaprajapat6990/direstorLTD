@@ -331,3 +331,14 @@ body {
     animation-delay: 1.1s;
   }
 }
+
+/* A statistic card whose big figure must stay on ONE line (the public home page's company count): the card is a size container and the figure
+   follows its width, from the normal 1.875rem down to a readable 1.1rem, instead of letting the last digit wrap. 5.62 = the widest 8-digit figure's
+   width in em (14,037,575 is 5.56em) plus a hair of slack. All four count figures use it, so they always share one size. */
+[data-fit-stat] {
+  container-type: inline-size;
+}
+[data-fit-stat] > p:first-child {
+  white-space: nowrap;
+  font-size: clamp(1.1rem, calc(100cqw / 5.62), 1.875rem);
+}

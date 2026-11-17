@@ -264,6 +264,8 @@ npm run ch:officer-worker -- --status          # officer pipeline health (read-o
 npm run ch:officer-worker -- --limit 500       # fetch officers for up to 500 queued companies, then stop
 npm run ch:officer-worker -- --limit 500 --crawl   # ...and also walk the background crawl (opt-in)
 npm run jobs:scheduler           # in-process scheduler (new registrations every 6h whenever COMPANIES_HOUSE_API_KEY is set; daily 03:00 UTC; monthly ingest only if MONTHLY_INGEST_ENABLED=1)
+# Production (Plesk, Windows/Linux supervisors, env vars, monitoring): see docs/PRODUCTION_SCHEDULER.md
+# npm run jobs:once (one pass, for scheduled-task fallback) / npm run jobs:status (heartbeat + job status)
 # Phase 1 live updates: keep ONE process running -  STREAM_WORKER_ENABLED=1 npm run jobs:scheduler
 #   (daily update at 03:00 UTC, retried every 30 min up to 5x/day on failure, never run twice per UTC day;
 #    filing stream runs inside it - do not also run ch:stream). Proof it ran: an IngestionRun row of kind

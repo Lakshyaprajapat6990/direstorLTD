@@ -194,11 +194,15 @@ export function RunEditor({ runs, onChange, label, id, placeholder, invalid, des
   const ref = useRef<HTMLDivElement>(null);
   const lastKey = useRef<string | null>(null);
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
   const toolbar = useToolbar();
   const history = useHistory();
   const historyRef = useRef(history);
-  historyRef.current = history;
+  // "Latest value" refs for the event handlers below: refreshed in a layout effect (declared first, so before every other effect of
+  // this component) instead of during render; handlers read them only when an event fires.
+  useLayoutEffect(() => {
+    onChangeRef.current = onChange;
+    historyRef.current = history;
+  });
   // The last selection inside this editor. The toolbar's selects, number boxes and colour picker take focus, which can clear the
   // browser's selection; formatting then still applies to the words that were selected.
   const lastRange = useRef<Range | null>(null);
@@ -272,7 +276,9 @@ export function RunEditor({ runs, onChange, label, id, placeholder, invalid, des
   }, []);
 
   const toolbarRef = useRef(toolbar);
-  toolbarRef.current = toolbar;
+  useLayoutEffect(() => {
+    toolbarRef.current = toolbar;
+  });
   useEffect(() => () => toolbarRef.current.clearIf(handle), [handle]);
 
   useEffect(() => {

@@ -2,7 +2,7 @@ import type { IngestionRun } from "@prisma/client";
 import { db } from "@/lib/db";
 import { RECONCILED_MESSAGE, effectiveStatus } from "./runs";
 
-export const RUN_KINDS = ["advanced_search", "bulk_csv", "stream", "officer_backfill", "daily_update", "new_registrations"] as const;
+export const RUN_KINDS = ["advanced_search", "bulk_csv", "stream", "officer_backfill", "daily_update", "new_registrations", "scheduler"] as const;
 
 export const RUN_KIND_LABELS: Record<string, string> = {
   advanced_search: "Advanced Search sample ingest",
@@ -11,6 +11,7 @@ export const RUN_KIND_LABELS: Record<string, string> = {
   officer_backfill: "Officer sync worker",
   daily_update: "Daily update",
   new_registrations: "New registrations sync",
+  scheduler: "Background scheduler (heartbeat)",
 };
 
 // Approximate size of the Companies House register, used only to express

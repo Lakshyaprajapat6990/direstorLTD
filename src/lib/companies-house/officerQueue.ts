@@ -42,6 +42,9 @@ export interface OfficerQueueConfig {
   staleAfterDays: number; // confirmed data older than this is "stale" and re-fetched by the TTL sweep
   softRefreshDays: number; // detail-page view older than this triggers a background refresh
   unavailableRecheckDays: number;
+  // Share (0-100) of the background crawl's companies that come from the DISSOLVED lane (8+ million companies that would otherwise wait
+  // behind every live company). 0 switches the dissolved lane off. It re-divides the same request budget; it never raises it.
+  crawlDissolvedPercent: number;
   // Most Companies House requests the officer worker may spend per UTC day (queue + crawl together). 0 = no cap.
   dailyRequestCap: number;
 }
@@ -63,6 +66,11 @@ export function loadOfficerConfig(env: NodeJS.ProcessEnv = process.env): Officer
     staleAfterDays: n("OFFICER_STALE_AFTER_DAYS", 180),
     softRefreshDays: n("OFFICER_SOFT_REFRESH_DAYS", 30),
     unavailableRecheckDays: n("OFFICER_UNAVAILABLE_RECHECK_DAYS", 90),
+    crawlDissolvedPercent: (() => {
+      const raw = env.OFFICER_CRAWL_DISSOLVED_PERCENT?.trim();
+      const v = raw === undefined || raw === "" ? 40 : Number(raw);
+      return Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : 40;
+    })(),
     // Conservative default; OFFICER_DAILY_REQUEST_CAP=0 removes the cap. Not read through n(): 0 is a valid value.
     dailyRequestCap: dailyCap,
   };
@@ -315,7 +323,8 @@ export async function retryParkedJobs(options: { companyIds?: string[]; limit?: 
 // Background crawl (P5): keyset cursor over Company, never OFFSET
 // ---------------------------------------------------------------------------
 const CURSOR_NAME = "officers";
-export type CrawlPhase = "active" | "other";
+const DISSOLVED_CURSOR_NAME = "officers_dissolved";
+export type CrawlPhase = "active" | "other" | "dissolved";
 
 export interface CrawlItem {
   id: string;
@@ -324,20 +333,23 @@ export interface CrawlItem {
 
 export interface CrawlSelection {
   items: CrawlItem[];
+  // Which persisted cursor this batch belongs to (the live lane and the dissolved lane each keep their own).
+  cursor: string;
   phase: CrawlPhase;
   // True when a complete pass found nothing left to fetch.
   exhausted: boolean;
 }
 
-export async function loadCrawlCursor(): Promise<{ phase: CrawlPhase; lastId: string; passes: number }> {
-  const row = await db.officerCrawlCursor.findUnique({ where: { name: CURSOR_NAME } });
-  return { phase: (row?.phase as CrawlPhase) ?? "active", lastId: row?.lastId ?? "", passes: row?.passes ?? 0 };
+export async function loadCrawlCursor(name: string = CURSOR_NAME): Promise<{ phase: CrawlPhase; lastId: string; passes: number }> {
+  const row = await db.officerCrawlCursor.findUnique({ where: { name } });
+  const fallback: CrawlPhase = name === DISSOLVED_CURSOR_NAME ? "dissolved" : "active";
+  return { phase: (row?.phase as CrawlPhase) ?? fallback, lastId: row?.lastId ?? "", passes: row?.passes ?? 0 };
 }
 
-export async function saveCrawlCursor(phase: CrawlPhase, lastId: string, passes?: number): Promise<void> {
+export async function saveCrawlCursor(phase: CrawlPhase, lastId: string, passes?: number, name: string = CURSOR_NAME): Promise<void> {
   await db.officerCrawlCursor.upsert({
-    where: { name: CURSOR_NAME },
-    create: { name: CURSOR_NAME, phase, lastId, passes: passes ?? 0 },
+    where: { name },
+    create: { name, phase, lastId, passes: passes ?? 0 },
     update: { phase, lastId, ...(passes !== undefined ? { passes } : {}) },
   });
 }
@@ -346,9 +358,13 @@ export async function saveCrawlCursor(phase: CrawlPhase, lastId: string, passes?
 // already exist - retrying or parked - are owned by the queue). Active
 // companies are walked first. The WHERE literals match the partial indexes.
 async function crawlPage(phase: CrawlPhase, afterId: string, limit: number): Promise<CrawlItem[]> {
-  // The second phase covers live-but-not-active companies (liquidation, administration, ...). Dissolved companies are
-  // deliberately excluded: they are fetched on demand only (view / follow / save / red-flag / report), never by the crawl.
-  const statusCond = phase === "active" ? `c."status" = 'active'` : `c."status" <> 'active' AND c."status" <> 'dissolved'`;
+  // LIVE lane: phase "active" (active companies), then "other" (live but not active: liquidation, administration, ...).
+  // DISSOLVED lane: phase "dissolved", walked through its own cursor so the 8+ million dissolved companies are not starved by the live
+  // backlog (the worker alternates the two lanes by OFFICER_CRAWL_DISSOLVED_PERCENT). A dissolved company is crawled exactly once: it
+  // leaves the predicate (officersCoverage 'none') the moment it has been checked, and it is never re-queued for a refresh (see
+  // enqueueFreshnessRefreshes), because a dissolved company's officer list no longer changes.
+  const statusCond =
+    phase === "active" ? `c."status" = 'active'` : phase === "dissolved" ? `c."status" = 'dissolved'` : `c."status" <> 'active' AND c."status" <> 'dissolved'`;
   return db.$queryRawUnsafe<CrawlItem[]>(
     `SELECT c."id", c."companyNumber" FROM "Company" c
       WHERE c."officersCoverage" = 'none' AND c."source" <> 'seed' AND ${statusCond} AND c."id" > $1
@@ -369,7 +385,7 @@ export async function selectCrawlBatch(limit: number): Promise<CrawlSelection> {
 
   for (let hop = 0; hop < 3; hop++) {
     const items = await crawlPage(phase, lastId, limit);
-    if (items.length > 0) return { items, phase, exhausted: false };
+    if (items.length > 0) return { items, phase, exhausted: false, cursor: CURSOR_NAME };
     if (phase === "active") {
       phase = "other";
       lastId = "";
@@ -377,10 +393,24 @@ export async function selectCrawlBatch(limit: number): Promise<CrawlSelection> {
     } else {
       // Wrapped the whole table: restart from the beginning next time.
       await saveCrawlCursor("active", "", cursor.passes + 1);
-      return { items: [], phase: "active", exhausted: true };
+      return { items: [], phase: "active", exhausted: true, cursor: CURSOR_NAME };
     }
   }
-  return { items: [], phase, exhausted: false };
+  return { items: [], phase, exhausted: false, cursor: CURSOR_NAME };
+}
+
+// The DISSOLVED lane: every dissolved company that has never been checked, in id order, through its own persisted cursor. Same eligibility
+// predicate as the live lane (real company, officersCoverage 'none', no queue row), so a company already fetched on demand is skipped and
+// one that failed is left to the queue's retry / park logic rather than being re-crawled.
+export async function selectDissolvedCrawlBatch(limit: number): Promise<CrawlSelection> {
+  const cursor = await loadCrawlCursor(DISSOLVED_CURSOR_NAME);
+  const items = await crawlPage("dissolved", cursor.lastId, limit);
+  if (items.length > 0) return { items, phase: "dissolved", exhausted: false, cursor: DISSOLVED_CURSOR_NAME };
+  if (cursor.lastId !== "") {
+    // Wrapped the whole lane: the next pass picks up anything that arrived behind the cursor.
+    await saveCrawlCursor("dissolved", "", cursor.passes + 1, DISSOLVED_CURSOR_NAME);
+  }
+  return { items: [], phase: "dissolved", exhausted: true, cursor: DISSOLVED_CURSOR_NAME };
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +456,7 @@ export async function enqueueFreshnessRefreshes(
   );
   const staleIds = await pick(
     `SELECT c."id" FROM "Company" c
-      WHERE c."officersCoverage" = 'full' AND c."officersFetchedAt" < ${utc(1)}
+      WHERE c."officersCoverage" = 'full' AND c."officersFetchedAt" < ${utc(1)} AND c."status" <> 'dissolved'
         AND NOT EXISTS (SELECT 1 FROM "OfficerSyncJob" j WHERE j."companyId" = c."id")
       ORDER BY c."officersFetchedAt" LIMIT $2`,
     new Date(now.getTime() - config.staleAfterDays * day).toISOString(),
@@ -434,7 +464,7 @@ export async function enqueueFreshnessRefreshes(
   );
   const unavailableIds = await pick(
     `SELECT c."id" FROM "Company" c
-      WHERE c."officersCoverage" = 'unavailable' AND c."officersFetchedAt" < ${utc(1)}
+      WHERE c."officersCoverage" = 'unavailable' AND c."officersFetchedAt" < ${utc(1)} AND c."status" <> 'dissolved'
         AND NOT EXISTS (SELECT 1 FROM "OfficerSyncJob" j WHERE j."companyId" = c."id")
       ORDER BY c."officersFetchedAt" LIMIT $2`,
     new Date(now.getTime() - config.unavailableRecheckDays * day).toISOString(),

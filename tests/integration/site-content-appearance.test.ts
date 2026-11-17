@@ -124,7 +124,7 @@ test("the draft API accepts valid appearance, formatting and order, and normalis
 
 test("hostile or malformed appearance, formatting and order are refused with located messages and change nothing", async () => {
   const before = (await state(sa)).draftVersion;
-  const cases: [string, (c: any) => void, RegExp][] = [
+  const cases: [string, (c: any) => void, RegExp][] = [ // eslint-disable-line @typescript-eslint/no-explicit-any
     ["a destination on a sign-in button", (c) => (c.styles = { buttons: { "hero.primary": { href: "https://evil.example" } } }), /fixed in code/],
     ["a new-tab flag on a sign-in button", (c) => (c.styles = { buttons: { "final.primary": { newTab: true } } }), /fixed in code/],
     ["a javascript: destination", (c) => (c.styles = { buttons: { "hero.secondary": { href: "javascript:alert(1)" } } }), /https:\/\/|Use/],

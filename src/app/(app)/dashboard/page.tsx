@@ -1,4 +1,4 @@
-import { getDataFreshness } from "@/lib/data/freshness";
+import { getDataFreshness, getIngestionFreshness } from "@/lib/data/freshness";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Search, Building2, CheckCircle2, XCircle, Users, Star, Bookmark, Flag, BellRing, BookMarked, ArrowRight, CalendarClock, Eye, Activity, History } from "lucide-react";
@@ -16,6 +16,9 @@ import { dailyUpdateFreshness } from "@/lib/jobs/display";
 import { describeFilter } from "@/lib/filters/describe";
 import { loadProfile } from "@/lib/customer/profile-store";
 import { CompleteProfilePrompt } from "@/components/customer/CompleteProfilePrompt";
+import { DirectorSummaryPanel } from "@/components/dashboard/DirectorSummaryPanel";
+import { getDirectorDataSummary } from "@/lib/data/director-summary";
+import type { ReactNode } from "react";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
@@ -62,6 +65,10 @@ export default async function DashboardPage() {
   const streamStatus = streamRun ? effectiveStatus(streamRun) : "never";
   // When the company data was last synchronised from Companies House (monthly file / new-registrations sync).
   const lastUpdated = (await getDataFreshness()).lastUpdated;
+  // Staff also see when each separate source last completed (customers keep the single, simple "Last updated").
+  const ingestion = session.role !== "CUSTOMER" ? await getIngestionFreshness().catch(() => null) : null;
+  // Staff also see how far the director-data processing has got and when it should finish; customers see the card as before.
+  const directorSummary = session.role !== "CUSTOMER" ? await getDirectorDataSummary().catch(() => null) : null;
 
   // ---- presentation helpers (no data / status logic changes) ----
   // Semantic accents. Full class names so Tailwind picks them up.
@@ -82,19 +89,22 @@ export default async function DashboardPage() {
   } as const;
 
   // Real share of the register (value / total). Tiny shares are shown honestly, never rounded up.
-  const share = (n: number) => (register.total > 0 ? (n / register.total) * 100 : 0);
-  const shareLabel = (n: number) => {
-    const p = share(n);
+  // (A tile may name its own denominator: the Director Data card uses the all-UK-companies figure of the same snapshot as its count.)
+  const share = (n: number, of: number = register.total) => (of > 0 ? (n / of) * 100 : 0);
+  const shareLabel = (n: number, of?: number) => {
+    const p = share(n, of);
     return p === 0 ? "0%" : p < 0.01 ? "<0.01%" : p < 10 ? `${p.toFixed(2)}%` : `${p.toFixed(1)}%`;
   };
 
   // Active / Dissolved bars are each status as a share of ALL UK companies (status mix, not import progress). The director bar is a
   // different measure - coverage: companies with confirmed director data / all UK companies. The wording beside each bar says which.
-  const registerTiles: { label: string; value: number; icon: typeof Building2; href?: string; kpi: Kpi; share?: boolean; shareText?: string; shareAria?: string; note?: string }[] = [
+  const registerTiles: { label: string; value: number; icon: typeof Building2; href?: string; kpi: Kpi; share?: boolean; shareText?: string; shareAria?: string; shareOf?: number; shareTitle?: string; note?: string; detail?: ReactNode }[] = [
     { label: "UK companies on the register", value: register.total, icon: Building2, href: "/companies", kpi: "blue", note: "Companies House register" },
     { label: "Active", value: register.active, icon: CheckCircle2, kpi: "green", share: true, shareText: "of total UK companies", shareAria: "of total UK companies" },
     { label: "Dissolved", value: register.dissolved, icon: XCircle, kpi: "red", share: true, shareText: "of total UK companies", shareAria: "of total UK companies" },
-    { label: "With confirmed director data", value: register.directorsConfirmed, icon: Users, kpi: "violet", share: true, shareText: "director data coverage", shareAria: "of UK companies have confirmed director data (coverage; fetch in progress)" },
+    // Companies with confirmed director data (the same query as the public site) and coverage = confirmed / all UK companies. Staff also get the
+    // "Processing progress" link that opens the Director data modal.
+    { label: "With confirmed director data", value: register.directorsConfirmed, icon: Users, kpi: "violet", share: true, shareText: "director data coverage", shareAria: "of UK companies have confirmed director data (coverage; fetch in progress)", detail: directorSummary ? <DirectorSummaryPanel view={directorSummary} /> : undefined },
   ];
   // Each tile links to an area with its own permission; people without it do not see a tile that leads nowhere.
   const allTiles: { label: string; value: number; icon: typeof Star; href: string; alert?: string; tone: keyof typeof CRM; show: boolean }[] = [
@@ -170,6 +180,13 @@ export default async function DashboardPage() {
                 ["Source", "Companies House"],
                 ["Registration ID", "Company number"],
                 ["Last updated", lastUpdated ? formatDate(lastUpdated) : "—"],
+                ...(ingestion
+                  ? [
+                      ["Dissolved refreshed", ingestion.dissolved.lastSuccessAt ? formatDate(ingestion.dissolved.lastSuccessAt) : "not yet"],
+                      ["Director data activity", ingestion.officers.lastActivityAt ? formatDate(ingestion.officers.lastActivityAt) : "not yet"],
+                      ["Scheduler", ingestion.scheduler.alive ? "running" : ingestion.scheduler.neverSeen ? "not started" : "stopped"],
+                    ]
+                  : []),
               ].map(([k, v]) => (
                 <span key={k} className="rounded-md bg-white/10 px-3 py-1.5 text-indigo-200 ring-1 ring-white/10">
                   {k}: <span className="font-semibold text-white">{v}</span>
@@ -198,7 +215,7 @@ export default async function DashboardPage() {
 
       {/* ---------------- REGISTER METRICS ---------------- */}
       <section aria-label="UK company register" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {registerTiles.map(({ label, value, icon: Icon, href, kpi, share: showShare, shareText, shareAria, note }) => {
+        {registerTiles.map(({ label, value, icon: Icon, href, kpi, share: showShare, shareText, shareAria, shareOf, shareTitle, note, detail }) => {
           const c = KPI[kpi];
           const body = (
             <div className={`relative h-full overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br ${c.tint} to-white p-4 shadow-sm transition-shadow hover:shadow-md`}>
@@ -212,11 +229,11 @@ export default async function DashboardPage() {
                 <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
                   {showShare ? (
                     <>
-                      <span className={`h-1.5 min-w-[56px] flex-1 overflow-hidden rounded-full ${c.track}`} role="img" aria-label={`${shareLabel(value)} ${shareAria ?? "of UK companies"}`}>
-                        <span className={`block h-full rounded-full ${c.bar}`} style={{ width: `${Math.max(share(value), share(value) > 0 ? 1.5 : 0)}%` }} />
+                      <span className={`h-1.5 min-w-[56px] flex-1 overflow-hidden rounded-full ${c.track}`} role="img" aria-label={`${shareLabel(value, shareOf)} ${shareAria ?? "of UK companies"}`}>
+                        <span className={`block h-full rounded-full ${c.bar}`} style={{ width: `${Math.max(share(value, shareOf), share(value, shareOf) > 0 ? 1.5 : 0)}%` }} />
                       </span>
-                      <span className={`whitespace-nowrap text-[11px] font-semibold tabular-nums ${c.text}`}>
-                        {shareLabel(value)}
+                      <span title={shareTitle} className={`whitespace-nowrap text-[11px] font-semibold tabular-nums ${c.text}`}>
+                        {shareLabel(value, shareOf)}
                         {shareText && <span className="font-medium"> {shareText}</span>}
                       </span>
                     </>
@@ -224,6 +241,7 @@ export default async function DashboardPage() {
                     <span className={`text-[11px] font-semibold ${c.text} group-hover:underline`}>{note ?? "Companies House register"}</span>
                   )}
                 </div>
+                {detail}
               </div>
             </div>
           );

@@ -10,6 +10,11 @@ import { reconcileStaleRuns, STALE_AFTER_MS, effectiveStatus } from "../../src/l
 import { buildCompanyWhere } from "../../src/lib/data/companies";
 
 const FIXTURE_ZIP = path.resolve(__dirname, "../fixtures/real-sample-59-rows.zip");
+// The sample holds 59 real rows, 6 of which are overseas companies (FC numbers). The UK-only rule (companies-house/eligibility.ts)
+// reads them but never stores them, so 59 rows are READ and 53 are STORED.
+const FIXTURE_ROWS = 59;
+const FIXTURE_OVERSEAS = ["FC031362", "FC027187", "FC018262", "FC015324", "FC025469", "FC004087"];
+const FIXTURE_STORED = FIXTURE_ROWS - FIXTURE_OVERSEAS.length;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dl-ingest-"));
 
 after(async () => {
@@ -56,16 +61,17 @@ test("a real Companies House ZIP sample ingests correctly end to end", async () 
   const t0 = new Date(Date.now() - 1000);
   const res = await bulkIngestFromCsv({ input: FIXTURE_ZIP, batchSize: 20 });
   assert.equal(res.status, "success", JSON.stringify(res));
-  assert.equal(res.rowsRead, 59);
+  assert.equal(res.rowsRead, FIXTURE_ROWS);
   assert.equal(res.rowsFailed, 0);
-  assert.equal(res.rowsSkipped, 0);
-  assert.equal(res.rowsInserted, 59);
+  assert.equal(res.rowsSkipped, 0); // overseas companies are excluded by design: neither skipped nor failed
+  assert.equal(res.rowsInserted, FIXTURE_STORED);
   assert.equal(res.rowsUpdated, 0);
+  assert.equal(await db.company.count({ where: { companyNumber: { in: FIXTURE_OVERSEAS } } }), 0, "overseas companies are never stored");
 
   const rows = await db.company.findMany({ where: { source: "bulk_import", chLastFetchedAt: { gte: t0 }, companyNumber: { not: { startsWith: "IT" } } } });
-  assert.equal(rows.length, 59);
+  assert.equal(rows.length, FIXTURE_STORED);
   const withPostcode = rows.filter((r) => r.registeredPostcode !== "").length;
-  assert.ok(withPostcode >= 50, `postcodes populated: ${withPostcode}/59`); // a few real rows legitimately have none
+  assert.ok(withPostcode >= 50, `postcodes populated: ${withPostcode}/${FIXTURE_STORED}`); // a few real rows legitimately have none
   assert.ok(rows.every((r) => r.registeredPostcode === r.registeredPostcode.toUpperCase()));
   assert.ok(rows.every((r) => r.incorporationDate.getUTCFullYear() > 1800 && r.incorporationDate.getUTCFullYear() <= new Date().getUTCFullYear()));
   assert.ok(rows.every((r) => r.incorporationDate.getTime() !== 0), "no 1970 dates");
@@ -87,7 +93,7 @@ test("a real Companies House ZIP sample ingests correctly end to end", async () 
   const run = await db.ingestionRun.findUniqueOrThrow({ where: { id: res.runId } });
   assert.equal(run.kind, "bulk_csv");
   assert.equal(run.status, "success");
-  assert.equal(run.rowsProcessed, 59);
+  assert.equal(run.rowsProcessed, FIXTURE_STORED); // processed = stored (inserted + updated)
   assert.ok(run.finishedAt);
 });
 
@@ -97,7 +103,7 @@ test("re-running the same input creates zero duplicates (idempotent)", async () 
   assert.equal(res.status, "success");
   assert.equal(res.rowsInserted, 0);
   assert.equal(res.rowsUpdated, 0); // identical data is no longer rewritten...
-  assert.equal(res.rowsUnchanged, 59); // ...it is counted as unchanged
+  assert.equal(res.rowsUnchanged, FIXTURE_STORED); // ...it is counted as unchanged (the overseas rows were never stored)
   assert.equal(await db.company.count(), before);
   const dupes = await db.$queryRaw<{ n: bigint }[]>`SELECT count(*) AS n FROM (SELECT "companyNumber" FROM "Company" GROUP BY 1 HAVING count(*) > 1) d`;
   assert.equal(Number(dupes[0].n), 0);

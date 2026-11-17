@@ -40,6 +40,7 @@ function load(): { recent: string[]; combos: Combo[] } {
 
 export function ColourMemoryProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<{ recent: string[]; combos: Combo[] }>({ recent: [], combos: [] });
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage can only be read after hydration; reading it during render would not match the server HTML
   useEffect(() => setState(load()), []);
   const persist = (next: { recent: string[]; combos: Combo[] }) => {
     setState(next);
@@ -89,6 +90,7 @@ export function ColourPanel({ value, fallback, onChange, onCommit, onReset, idPr
 
   // Follow outside changes (undo, another control, picking a swatch) without disturbing the hue while dragging.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate prop-to-state sync: the hue must not jump while the user drags, so this cannot be derived during render
     if (isHex(current) && hsvToHex(hsv) !== current) setHsv(hexToHsv(current));
     setDraft(current);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the value changes from outside

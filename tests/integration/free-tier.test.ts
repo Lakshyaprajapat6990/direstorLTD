@@ -10,7 +10,9 @@ after(async () => {
 // Real PostgreSQL + the production build on scratch resources only. The server runs with the default quota (10 different
 // company profiles per free account, lifetime).
 const LIMIT = 10;
-const tag = `FT${randomUUID().slice(0, 6).toUpperCase()}`;
+// The trailing "X" makes the tag 9 characters: a search term of exactly 8 characters shaped like two letters + six digits is treated as a
+// company NUMBER (exact lookup), and 6 random hex characters are all digits about 6% of the time, which made this test flaky.
+const tag = `FT${randomUUID().slice(0, 6).toUpperCase()}X`;
 const origin = { origin: BASE };
 
 async function customer(): Promise<Session> {

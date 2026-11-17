@@ -81,6 +81,7 @@ export function useUndoStack<T>(value: T, set: (v: T) => void) {
     bump((n) => n + 1);
   }, []);
 
+  // eslint-disable-next-line react-hooks/refs -- deliberate: the steps live in refs and every change calls bump() to re-render, so these reads are always current
   const api: HistoryApi = { undo, redo, canUndo: past.current.length > 0, canRedo: future.current.length > 0 };
   return { api, boundary, clear };
 }

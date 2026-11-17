@@ -16,6 +16,8 @@ import {
   releaseWorkerLeases,
   saveCrawlCursor,
   selectCrawlBatch,
+  selectDissolvedCrawlBatch,
+  type CrawlSelection,
   type OfficerQueueConfig,
 } from "./officerQueue";
 
@@ -77,6 +79,7 @@ export interface OfficerWorkerOptions {
   crawl?: boolean; // process the P5 background crawl (default FALSE: opt-in)
   priorityMax?: number; // only claim queued jobs with priority <= this
   dailyRequestCap?: number; // override config.dailyRequestCap (0 = unlimited)
+  crawlDissolvedPercent?: number; // override config.crawlDissolvedPercent (share 0-100 of crawled companies taken from the dissolved lane)
   freshness?: boolean; // enqueue dirty / TTL refreshes when idle (default true)
   exitWhenIdle?: boolean; // return instead of waiting when there is nothing to do
   idleSleepMs?: number;
@@ -100,6 +103,7 @@ export interface OfficerWorkerStats {
   expiredLeasesReleased: number;
   freshnessEnqueued: number;
   crawled: number;
+  crawledDissolved: number; // ...of which came from the dissolved lane
   dailyRequestCap: number; // the cap this run enforced (0 = none), so monitoring can show the cap the worker actually used
   // Companies House requests this run sent (officer pages, plus the profile lookup behind an "unavailable" answer). A company
   // with more officers than one page holds costs extra pages that are not counted, so this is a close lower bound.
@@ -165,7 +169,7 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
 
   const stats: OfficerWorkerStats = {
     workerId, claimed: 0, processed: 0, full: 0, unavailable: 0, failures: 0, parked: 0, systemicHandBacks: 0, quotaDeferrals: 0, http429s: 0,
-    expiredLeasesReleased: 0, freshnessEnqueued: 0, crawled: 0, dailyRequestCap: 0, requests: 0, stopReason: "idle", companiesPerMinute: 0,
+    expiredLeasesReleased: 0, freshnessEnqueued: 0, crawled: 0, crawledDissolved: 0, dailyRequestCap: 0, requests: 0, stopReason: "idle", companiesPerMinute: 0,
   };
 
   if (!isRestConfigured()) {
@@ -206,6 +210,32 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
   const spentBeforeThisRun = dailyCap > 0 ? await officerRequestsSpentToday(run.id) : 0;
   const capLeft = () => (dailyCap > 0 ? dailyCap - spentBeforeThisRun - stats.requests : Infinity);
   if (dailyCap > 0) log(`daily request cap ${dailyCap}: ${spentBeforeThisRun} already spent today`);
+
+  // The background crawl has two lanes: LIVE companies (active first, then every other live status) and DISSOLVED companies. They take
+  // turns by credit, so with OFFICER_CRAWL_DISSOLVED_PERCENT = 40 two of every five crawled companies are dissolved ones and neither lane can
+  // starve the other. A lane with nothing left gives its turns to the other, and a lane that reported "nothing left" is not asked again for
+  // ten minutes. The share only divides the SAME request budget (the daily cap and the quota gate still decide how much is spent).
+  const dissolvedPercent = options.crawlDissolvedPercent ?? config.crawlDissolvedPercent;
+  let dissolvedCredit = 0;
+  const laneIdleUntil = { live: 0, dissolved: 0 };
+  const laneOrder = (): ("live" | "dissolved")[] => {
+    if (dissolvedPercent <= 0) return ["live"];
+    dissolvedCredit += dissolvedPercent / 100;
+    if (dissolvedCredit >= 1 - 1e-9) {
+      dissolvedCredit -= 1;
+      return ["dissolved", "live"];
+    }
+    return ["live", "dissolved"];
+  };
+  const nextCrawlBatch = async (take: number): Promise<CrawlSelection | null> => {
+    for (const lane of laneOrder()) {
+      if (Date.now() < laneIdleUntil[lane]) continue;
+      const sel = lane === "dissolved" ? await selectDissolvedCrawlBatch(take) : await selectCrawlBatch(take);
+      if (sel.items.length > 0) return sel;
+      laneIdleUntil[lane] = Date.now() + 10 * 60_000;
+    }
+    return null;
+  };
 
   let lastFreshnessAt = 0;
   let fatal: unknown = null;
@@ -323,6 +353,9 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
           stats.claimed += jobs.length;
           for (const job of jobs) {
             if (stopped() || expired() || limitReached()) break;
+            // The batch size assumes one request per company, but a company can cost two (see handleItem) and a claim can return more
+            // rows than were asked for: never START a company once the daily cap is spent. The unreached jobs go back, uncharged, below.
+            if (capLeft() <= 0) break;
             const r = await handleItem(job, false);
             if (r === "stop") { stats.stopReason = "auth_breaker"; break loop; }
             if (r === "systemic") continue loop;
@@ -334,18 +367,20 @@ export async function runOfficerWorker(options: OfficerWorkerOptions = {}): Prom
 
       // ---- crawl (P5) ----
       if (useCrawl) {
-        const sel = await selectCrawlBatch(take);
-        if (sel.items.length > 0) {
+        const sel = await nextCrawlBatch(take);
+        if (sel && sel.items.length > 0) {
           let lastDone: string | null = null;
           for (const item of sel.items) {
             if (stopped() || expired() || limitReached()) break;
+            if (capLeft() <= 0) break; // same rule as the queue: never start a company once the daily cap is spent
             const r = await handleItem({ companyId: item.id, companyNumber: item.companyNumber, priority: OFFICER_PRIORITY.CRAWL }, true);
             if (r === "stop") { stats.stopReason = "auth_breaker"; break; }
             if (r === "systemic") break;
             lastDone = item.id;
             stats.crawled++;
+            if (sel.phase === "dissolved") stats.crawledDissolved++;
           }
-          if (lastDone) await saveCrawlCursor(sel.phase, lastDone);
+          if (lastDone) await saveCrawlCursor(sel.phase, lastDone, undefined, sel.cursor);
           if (stats.stopReason === "auth_breaker") break;
           continue;
         }

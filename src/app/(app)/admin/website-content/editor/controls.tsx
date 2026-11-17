@@ -35,6 +35,7 @@ export function NumberField({ id, label, value, min, max, step = 1, unit = "px",
   const [draft, setDraft] = useState(value === undefined ? "" : String(value));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- deliberate prop-to-state sync: free typing lives in `draft`; an outside change (undo, another control) replaces it
     setDraft(value === undefined ? "" : String(value));
     setError(null);
   }, [value]);

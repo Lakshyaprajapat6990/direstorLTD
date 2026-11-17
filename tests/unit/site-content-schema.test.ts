@@ -13,8 +13,10 @@ const issues = (input: unknown) => {
   assert.equal(r.ok, false);
   return r.ok ? [] : r.issues;
 };
+// These tests write wrong or extra fields on purpose, so they work on a deliberately untyped view of the content.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mut = (fn: (c: any) => void) => {
+type Draft = any;
+const mut = (fn: (c: Draft) => void) => {
   const c = base();
   fn(c);
   return c;
@@ -30,18 +32,18 @@ test("the built-in content, as editable content, validates and round-trips to ex
 
 test("unknown fields are rejected at every level, so code-controlled content cannot be smuggled in", () => {
   for (const extra of [
-    (c: any) => (c.stats = { total: 1 }),
-    (c: any) => (c.api = { available: true }),
-    (c: any) => (c.hero.apiNote = "API available now"),
-    (c: any) => (c.hero.heading.href = "/x"),
-    (c: any) => (c.header.links[0].href = "https://evil.example"),
-    (c: any) => (c.footer.links[0].href = "/admin"),
-    (c: any) => (c.faq.items[0].protected = false),
-    (c: any) => (c.platform.cards[0].href = "/admin"),
-    (c: any) => (c.platform.cards[0].icon = "Star"),
-    (c: any) => (c.useCases.items[0].tone = "red"),
-    (c: any) => (c.search.tabs.extra = { label: "x", hint: "y", fields: ["z"] }),
-    (c: any) => (c.corporateStructure = { heading: "We hold ownership data" }),
+    (c: Draft) => (c.stats = { total: 1 }),
+    (c: Draft) => (c.api = { available: true }),
+    (c: Draft) => (c.hero.apiNote = "API available now"),
+    (c: Draft) => (c.hero.heading.href = "/x"),
+    (c: Draft) => (c.header.links[0].href = "https://evil.example"),
+    (c: Draft) => (c.footer.links[0].href = "/admin"),
+    (c: Draft) => (c.faq.items[0].protected = false),
+    (c: Draft) => (c.platform.cards[0].href = "/admin"),
+    (c: Draft) => (c.platform.cards[0].icon = "Star"),
+    (c: Draft) => (c.useCases.items[0].tone = "red"),
+    (c: Draft) => (c.search.tabs.extra = { label: "x", hint: "y", fields: ["z"] }),
+    (c: Draft) => (c.corporateStructure = { heading: "We hold ownership data" }),
   ]) {
     const found = issues(mut(extra));
     assert.ok(found.some((i) => /Unknown field/.test(i.message)), JSON.stringify(found));

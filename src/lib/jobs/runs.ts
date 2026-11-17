@@ -8,7 +8,7 @@ import { db } from "@/lib/db";
 //    Settings/Super Admin never show a crashed job as still running;
 //  - a run is only "success" if its failure rate is honestly low.
 
-export type RunKind = "advanced_search" | "bulk_csv" | "stream" | "officer_backfill" | "daily_update" | "new_registrations";
+export type RunKind = "advanced_search" | "bulk_csv" | "stream" | "officer_backfill" | "daily_update" | "new_registrations" | "scheduler";
 export type RunStatus = "running" | "success" | "partial" | "failed";
 
 // Jobs heartbeat at least every minute (stream: every 30s, CSV: every batch).
@@ -17,8 +17,15 @@ export const STALE_AFTER_MS = 10 * 60 * 1000;
 // already mean it is dead.
 export const OFFICER_WORKER_STALE_AFTER_MS = 2 * 60 * 1000;
 
+// The scheduler process heartbeats every ~30s (see schedulerLease.ts); two minutes of silence means it is dead, so a restarted
+// scheduler can take over quickly instead of waiting out the ten-minute window.
+export const SCHEDULER_STALE_AFTER_MS = OFFICER_WORKER_STALE_AFTER_MS;
+
+// Kinds that heartbeat on a timer every ~30s (the others heartbeat per batch and get the longer window).
+const SHORT_HEARTBEAT_KINDS: string[] = ["officer_backfill", "scheduler"];
+
 export function staleAfterMs(kind: string): number {
-  return kind === "officer_backfill" ? OFFICER_WORKER_STALE_AFTER_MS : STALE_AFTER_MS;
+  return SHORT_HEARTBEAT_KINDS.includes(kind) ? OFFICER_WORKER_STALE_AFTER_MS : STALE_AFTER_MS;
 }
 
 // Written by reconcileStaleRuns. A worker that was merely paused (laptop sleep, long GC, DB outage) can heartbeat again
@@ -54,11 +61,11 @@ export async function reconcileStaleRuns(now: Date = new Date()): Promise<number
     errorMessage: RECONCILED_MESSAGE,
   };
   const officer = await db.ingestionRun.updateMany({
-    where: { status: "running", kind: "officer_backfill", heartbeatAt: { lt: new Date(now.getTime() - OFFICER_WORKER_STALE_AFTER_MS) } },
+    where: { status: "running", kind: { in: SHORT_HEARTBEAT_KINDS }, heartbeatAt: { lt: new Date(now.getTime() - OFFICER_WORKER_STALE_AFTER_MS) } },
     data,
   });
   const others = await db.ingestionRun.updateMany({
-    where: { status: "running", kind: { not: "officer_backfill" }, heartbeatAt: { lt: new Date(now.getTime() - STALE_AFTER_MS) } },
+    where: { status: "running", kind: { notIn: SHORT_HEARTBEAT_KINDS }, heartbeatAt: { lt: new Date(now.getTime() - STALE_AFTER_MS) } },
     data,
   });
   return officer.count + others.count;

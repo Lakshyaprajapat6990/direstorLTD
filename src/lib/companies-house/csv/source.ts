@@ -110,8 +110,10 @@ export async function downloadToCache(url: string, dir: string, onLog: (m: strin
 
 // Monthly file URL. Companies House publishes on/around the 1st; if the
 // current month's file is not up yet, fall back to the previous month.
+// CH_BULK_DOWNLOAD_BASE_URL exists so the scheduled monthly job can be tested against a local stub; production never sets it.
 export function monthlyFileUrl(year: number, month1: number): string {
-  return `https://download.companieshouse.gov.uk/BasicCompanyDataAsOneFile-${year}-${String(month1).padStart(2, "0")}-01.zip`;
+  const base = (process.env.CH_BULK_DOWNLOAD_BASE_URL?.trim() || "https://download.companieshouse.gov.uk").replace(/\/+$/, "");
+  return `${base}/BasicCompanyDataAsOneFile-${year}-${String(month1).padStart(2, "0")}-01.zip`;
 }
 
 export async function resolveLatestMonthlyUrl(now: Date = new Date()): Promise<string> {

@@ -7,8 +7,10 @@ import { newSection } from "@/lib/site-content/editor-model";
 import { contentHash } from "@/lib/site-content/canonical";
 
 const base = (): EditableContent => JSON.parse(JSON.stringify(toEditable(DEFAULT_SITE_CONTENT)));
+// These tests write wrong or extra fields on purpose, so they work on a deliberately untyped view of the content.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mut = (fn: (c: any) => void) => {
+type Draft = any;
+const mut = (fn: (c: Draft) => void) => {
   const c = base();
   fn(c);
   return c;
@@ -116,7 +118,7 @@ test("every paragraph field in the built-in content accepts formatting", () => {
 
 test("labels, headings and button text stay plain: formatting there is refused", () => {
   const rich = { runs: [{ text: "x", b: true }] };
-  for (const set of [(c: any) => (c.hero.primaryCtaLabel = rich), (c: any) => (c.faq.heading = rich), (c: any) => (c.header.links[0].label = rich), (c: any) => (c.platform.cards[0].title = rich)]) {
+  for (const set of [(c: Draft) => (c.hero.primaryCtaLabel = rich), (c: Draft) => (c.faq.heading = rich), (c: Draft) => (c.header.links[0].label = rich), (c: Draft) => (c.platform.cards[0].title = rich)]) {
     assert.equal(parseEditableContent(mut(set)).ok, false);
   }
 });

@@ -25,6 +25,7 @@ export function MediaPicker({ open, onClose, onPick }: { open: boolean; onClose:
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset to "loading" each time the dialog opens, then fetch the list
       setItems(null);
       void load();
     }

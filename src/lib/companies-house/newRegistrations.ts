@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { chRestGet, CompaniesHouseBreakerOpenError, CompaniesHouseRateLimitError } from "./client";
+import { chRestGet, CompaniesHouseBreakerOpenError, CompaniesHouseNotFoundError, CompaniesHouseRateLimitError } from "./client";
+import { enqueueOfficerJobs, OFFICER_PRIORITY } from "./officerQueue";
 import { parseChDate } from "./csv/dates";
 import { normalisePostcode } from "./csv/mapping";
 import { isNonUkCompany } from "./eligibility";
@@ -33,6 +34,8 @@ export interface NewRegistrationsOptions {
   to?: string; // YYYY-MM-DD, inclusive (default: today, UTC)
   signal?: AbortSignal;
   log?: (msg: string) => void;
+  // Test seam: replaces the Companies House request (default: the live, quota-gated search).
+  fetcher?: DayFetcher;
 }
 
 export interface NewRegistrationsResult {
@@ -118,39 +121,121 @@ export function mapSearchItem(item: AdvancedSearchItem): { ok: true; data: Prism
   };
 }
 
-async function fetchDay(day: string, signal?: AbortSignal): Promise<AdvancedSearchResponse> {
-  for (let attempt = 0; ; attempt++) {
-    if (signal?.aborted) throw new Error("aborted");
-    try {
-      return await chRestGet<AdvancedSearchResponse>(SEARCH_PATH, {
-        params: { incorporated_from: day, incorporated_to: day, size: PAGE_SIZE, start_index: 0 },
-        quotaClass: "backfill",
-        maxQuotaWaitMs: 5 * 60_000,
-        timeoutMs: 120_000,
-      });
-    } catch (err) {
-      if (err instanceof CompaniesHouseRateLimitError && attempt < 4) {
-        await new Promise((r) => setTimeout(r, Math.max(1000, err.retryAfterMs)));
-        continue;
-      }
-      throw err;
+export interface DayFilter {
+  company_status?: string;
+  company_type?: string;
+  // Control reads only: widens the window to `day` .. `through` (default: the single day).
+  through?: string;
+}
+
+// Companies House itself has genuinely empty days (13 and 14 June 2026 are absent from its own monthly file). A finished day with
+// no registrations is therefore accepted as covered only when BOTH hold: it is older than this many days (search results can lag
+// the incorporation date, so a recent empty day is retried instead), and a control read of the preceding week proves the search
+// is answering with real data. Otherwise it is refused, exactly like any other incomplete day.
+export const EMPTY_DAY_CONFIRM_AFTER_DAYS = 2;
+export const EMPTY_DAY_CONTROL_DAYS = 7;
+export type DayFetcher = (day: string, filter: DayFilter) => Promise<AdvancedSearchResponse>;
+
+// A day with more than one response page of registrations (5,000) cannot be paged: start_index beyond the first page errors. It is
+// therefore read as disjoint slices - by company_status, and any slice that is still too large by company_type. Completeness is
+// PROVED, never assumed: the slice totals must add up exactly to the day's total, and every leaf slice must have been read in full.
+// If the numbers do not reconcile (a status or type missing from these lists, or a slice that is still too big) the day throws and
+// is NOT covered, so the checkpoint cannot claim a hole is filled.
+export const SPLIT_STATUSES = ["active", "dissolved", "liquidation", "administration", "receivership", "voluntary-arrangement", "insolvency-proceedings", "converted-closed", "closed", "open", "registered", "removed"];
+export const SPLIT_TYPES = [
+  "ltd", "plc", "llp", "private-limited-guarant-nsc", "private-limited-guarant-nsc-limited-exemption", "private-unlimited", "private-unlimited-nsc",
+  "limited-partnership", "scottish-partnership", "royal-charter", "industrial-and-provident-society", "registered-society-non-jurisdictional",
+  "charitable-incorporated-organisation", "scottish-charitable-incorporated-organisation", "northern-ireland", "northern-ireland-other",
+  "old-public-company", "protected-cell-company", "assurance-company", "investment-company-with-variable-capital", "icvc-securities", "icvc-warrant",
+  "icvc-umbrella", "unregistered-company", "european-public-limited-liability-co-se", "eeig", "converted-or-closed", "oversea-company",
+  "uk-establishment", "registered-overseas-entity", "further-education-or-sixth-form-college-corp", "other",
+];
+
+export async function readDayComplete(day: string, fetcher: DayFetcher): Promise<{ items: AdvancedSearchItem[]; hits: number; requests: number; split: boolean }> {
+  const top = await fetcher(day, {});
+  const topItems = top.items ?? [];
+  const hits = top.hits ?? topItems.length;
+  if (hits <= topItems.length) return { items: topItems, hits, requests: 1, split: false };
+
+  let requests = 1;
+  const byNumber = new Map<string, AdvancedSearchItem>();
+  const add = (items: AdvancedSearchItem[]) => items.forEach((i) => byNumber.set(i.company_number, i));
+  let statusSum = 0;
+  for (const status of SPLIT_STATUSES) {
+    const r = await fetcher(day, { company_status: status });
+    requests++;
+    const items = r.items ?? [];
+    const h = r.hits ?? items.length;
+    if (h === 0) continue;
+    if (h <= items.length) {
+      add(items);
+      statusSum += h;
+      continue;
     }
+    let typeSum = 0;
+    for (const type of SPLIT_TYPES) {
+      const rr = await fetcher(day, { company_status: status, company_type: type });
+      requests++;
+      const ii = rr.items ?? [];
+      const hh = rr.hits ?? ii.length;
+      if (hh > ii.length) throw new Error(`${day}: status "${status}" / type "${type}" still has ${hh} matches but only ${ii.length} could be read`);
+      add(ii);
+      typeSum += hh;
+    }
+    if (typeSum !== h) throw new Error(`${day}: status "${status}" split by type accounts for ${typeSum} of ${h} companies; not claiming coverage`);
+    statusSum += h;
   }
+  if (statusSum !== hits) throw new Error(`${day}: ${hits} companies match but the split by status accounts for ${statusSum}; not claiming coverage`);
+  return { items: [...byNumber.values()], hits, requests, split: true };
+}
+
+// The real fetcher: every request goes through the shared quota gate (class "backfill"). Companies House answers 404 for a search
+// with no matches (see dissolvedImport.ts), which is an empty slice, not an error.
+function liveFetcher(signal?: AbortSignal): DayFetcher {
+  return async (day, filter) => {
+    for (let attempt = 0; ; attempt++) {
+      if (signal?.aborted) throw new Error("aborted");
+      try {
+        return await chRestGet<AdvancedSearchResponse>(SEARCH_PATH, {
+          params: { incorporated_from: day, incorporated_to: filter.through ?? day, company_status: filter.company_status, company_type: filter.company_type, size: PAGE_SIZE, start_index: 0 },
+          quotaClass: "backfill",
+          maxQuotaWaitMs: 5 * 60_000,
+          timeoutMs: 120_000,
+        });
+      } catch (err) {
+        if (err instanceof CompaniesHouseNotFoundError) return { items: [], hits: 0 };
+        if (err instanceof CompaniesHouseRateLimitError && attempt < 4) {
+          await new Promise((r) => setTimeout(r, Math.max(1000, err.retryAfterMs)));
+          continue;
+        }
+        throw err;
+      }
+    }
+  };
 }
 
 // Stores one day. Returns the counters. Throws if the day cannot be stored completely (then the day is NOT covered).
-async function storeDay(day: string, signal?: AbortSignal) {
-  const res = await fetchDay(day, signal);
-  const items = res.items ?? [];
-  const hits = res.hits ?? items.length;
-  // Deeper paging is not available from this endpoint (start_index beyond the first page errors), so a day larger than
-  // one page cannot be read completely. Refuse to claim coverage rather than silently dropping companies.
-  if (hits > items.length) throw new Error(`${day}: ${hits} companies match but only ${items.length} could be read in one request`);
+export async function storeDay(day: string, signal?: AbortSignal, fetcher: DayFetcher = liveFetcher(signal)) {
+  const { items, hits } = await readDayComplete(day, fetcher);
+  // An empty answer for a finished day usually means the search is broken, not that nothing happened. It is accepted as genuinely
+  // empty only when the day is old enough AND a control read of the preceding week returns data (see EMPTY_DAY_CONFIRM_AFTER_DAYS);
+  // otherwise it is refused and the next run retries it. Today may legitimately be empty just after midnight UTC.
+  let confirmedEmpty = false;
+  if (hits === 0 && day < isoDay(new Date())) {
+    const tooRecent = day > addDays(isoDay(new Date()), -EMPTY_DAY_CONFIRM_AFTER_DAYS - 1);
+    const control = tooRecent ? null : await fetcher(addDays(day, -EMPTY_DAY_CONTROL_DAYS), { through: addDays(day, -1) });
+    if (tooRecent) throw new Error(`${day}: Companies House returned no registrations for a finished day (too recent to treat as genuinely empty); not claiming coverage`);
+    if (!control || (control.hits ?? control.items?.length ?? 0) === 0) {
+      throw new Error(`${day}: Companies House returned no registrations for a finished day and the preceding ${EMPTY_DAY_CONTROL_DAYS} days also returned none (the search looks broken); not claiming coverage`);
+    }
+    confirmedEmpty = true;
+  }
 
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
   let ineligible = 0;
+  let queuedOfficers = 0;
   const samples = new ErrorSampler(10);
   const mapped: Prisma.CompanyCreateManyInput[] = [];
   items.forEach((item, i) => {
@@ -173,6 +258,12 @@ async function storeDay(day: string, signal?: AbortSignal) {
       // skipDuplicates makes a concurrent writer (the stream creating the same company) harmless.
       const r = await db.company.createMany({ data: fresh, skipDuplicates: true });
       inserted += r.count;
+      // Newly registered live companies enter the officer queue so their directors are fetched within a day or two, ahead of the
+      // general crawl (lowest queue priority, "backfill" quota class, and still bounded by the officer worker's daily request cap).
+      // Best effort: the company rows are already stored, so a queue failure must never fail (or un-cover) the day.
+      await queueNewCompaniesForOfficers(fresh.filter((c) => c.status === "active").map((c) => c.companyNumber))
+        .then((n) => (queuedOfficers += n))
+        .catch(() => {});
     }
     // Existing rows from the bulk file or an earlier search are refreshed; stream / full-profile rows are left alone.
     for (const c of chunk) {
@@ -198,7 +289,18 @@ async function storeDay(day: string, signal?: AbortSignal) {
       updated++;
     }
   }
-  return { read: items.length, inserted, updated, skipped, ineligible, samples: samples.toJson() };
+  return { read: items.length, inserted, updated, skipped, ineligible, queuedOfficers, confirmedEmpty, samples: samples.toJson() };
+}
+
+// Queues officer fetching for newly stored active companies (NEW_REGISTRATIONS_QUEUE_OFFICERS=0 turns it off;
+// NEW_REGISTRATIONS_OFFICER_CAP bounds how many one day may queue, default 10,000). Idempotent: one queue row per company.
+export async function queueNewCompaniesForOfficers(companyNumbers: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  if (env.NEW_REGISTRATIONS_QUEUE_OFFICERS === "0" || companyNumbers.length === 0) return 0;
+  const cap = Number.isFinite(Number(env.NEW_REGISTRATIONS_OFFICER_CAP)) && Number(env.NEW_REGISTRATIONS_OFFICER_CAP) > 0 ? Number(env.NEW_REGISTRATIONS_OFFICER_CAP) : 10_000;
+  const rows = await db.company.findMany({ where: { companyNumber: { in: companyNumbers }, status: "active", officersCoverage: "none", source: { not: "seed" } }, select: { id: true } });
+  if (rows.length === 0) return 0;
+  const r = await enqueueOfficerJobs(rows.map((x) => x.id), { priority: OFFICER_PRIORITY.PREFETCH, reason: "new_registration", cap });
+  return r.inserted;
 }
 
 async function resumePoint(): Promise<{ lastCovered: string | null; bulkSnapshot: string | null }> {
@@ -239,7 +341,7 @@ export async function syncNewRegistrations(options: NewRegistrationsOptions = {}
       break;
     }
     try {
-      const r = await storeDay(day, options.signal);
+      const r = await storeDay(day, options.signal, options.fetcher);
       totals.read += r.read;
       totals.inserted += r.inserted;
       totals.updated += r.updated;
@@ -249,7 +351,7 @@ export async function syncNewRegistrations(options: NewRegistrationsOptions = {}
       daysCovered++;
       // The checkpoint is "the last day fully stored": it only ever advances over contiguous, completed days.
       await touchRun(run.id, { checkpoint: day, rowsRead: totals.read, rowsInserted: totals.inserted, rowsUpdated: totals.updated, rowsSkipped: totals.skipped, rowsProcessed: totals.inserted + totals.updated });
-      log(`  ${day}: ${r.read} read, ${r.inserted} new, ${r.updated} refreshed${r.skipped ? `, ${r.skipped} skipped` : ""}${r.ineligible ? `, ${r.ineligible} not UK (excluded)` : ""}`);
+      log(`  ${day}: ${r.read} read, ${r.inserted} new, ${r.updated} refreshed${r.skipped ? `, ${r.skipped} skipped` : ""}${r.ineligible ? `, ${r.ineligible} not UK (excluded)` : ""}${r.queuedOfficers ? `, ${r.queuedOfficers} queued for officer data` : ""}${r.confirmedEmpty ? " (no registrations at Companies House for this day; confirmed by a control read of the preceding week)" : ""}`);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       if (err instanceof CompaniesHouseBreakerOpenError) error = `Companies House unavailable: ${error}`;

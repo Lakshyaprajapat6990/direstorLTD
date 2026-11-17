@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Untracked scratch folder of one-off local scripts (git-ignored; never present in a clean checkout or in CI).
+    "tmp-ingest/**",
   ]),
 ]);
 

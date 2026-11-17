@@ -109,9 +109,12 @@ function HeroWords({ words, start }: { words: string[]; start: number }) {
 type Edm = (path: string, extra?: CSSProperties) => EdAttrs;
 
 // One figure card. The figure is live data (never editable text); the caption below it is editable and the card's look can be set.
-function Stat({ value, labelKey, label, valueClassName = "text-2xl sm:text-3xl", count = true, edm, sc }: { value: string; labelKey: StatLabelKey; label: string; valueClassName?: string; count?: boolean; edm: Edm; sc: ReturnType<typeof statCardCss> }) {
+// fit: the figure always stays on ONE line: globals.css ([data-fit-stat]) sizes it by the width of its own card (a container query), from the
+// normal size down to a readable minimum, instead of letting the last digit wrap. Used for ALL the company-count figures (total, active,
+// dissolved, directors) so they always share exactly the same size: the cards in the grid have equal width, so the same rule gives the same size.
+function Stat({ value, labelKey, label, valueClassName = "text-2xl sm:text-3xl", count = true, fit = false, edm, sc }: { value: string; labelKey: StatLabelKey; label: string; valueClassName?: string; count?: boolean; fit?: boolean; edm: Edm; sc: ReturnType<typeof statCardCss> }) {
   return (
-    <div className="min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-4" {...edm(`card:stat.${labelKey}`, sc.card)}>
+    <div className="min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-4" data-fit-stat={fit ? "" : undefined} {...edm(`card:stat.${labelKey}`, sc.card)}>
       <p className={`break-words font-bold tabular-nums text-indigo-900 ${valueClassName}`} {...edm(`card:stat.${labelKey}`, sc.value)}>{count ? <CountUp value={value} /> : value}</p>
       <p className="mt-1 text-sm text-slate-500" {...edm(`ukRegister.labels.${labelKey}`, sc.label)}>{label}</p>
     </div>
@@ -250,10 +253,10 @@ export function HomeView({ content: c, stats, structure = null, editing = false 
             </h2>
             <RichP value={c.ukRegister.intro} attrs={ed("ukRegister.intro")} className="mt-5 text-lg leading-relaxed text-slate-500" />
             <div className="mt-8 grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3" {...lock(LOCK.stats)}>
-              <Stat value={n(r?.total)} labelKey="total" label={L("total")} edm={edm} sc={scOf("total")} />
-                <Stat value={n(r?.active)} labelKey="active" label={L("active")} edm={edm} sc={scOf("active")} />
-                <Stat value={n(r?.dissolved)} labelKey="dissolved" label={L("dissolved")} edm={edm} sc={scOf("dissolved")} />
-                <Stat value={n(r?.directorsConfirmed)} labelKey="directors" label={L("directors")} edm={edm} sc={scOf("directors")} />
+              <Stat value={n(r?.total)} labelKey="total" label={L("total")} fit edm={edm} sc={scOf("total")} />
+                <Stat value={n(r?.active)} labelKey="active" label={L("active")} fit edm={edm} sc={scOf("active")} />
+                <Stat value={n(r?.dissolved)} labelKey="dissolved" label={L("dissolved")} fit edm={edm} sc={scOf("dissolved")} />
+                <Stat value={n(r?.directorsConfirmed)} labelKey="directors" label={L("directors")} fit edm={edm} sc={scOf("directors")} />
                 <Stat value={String(COMPANY_FILTER_FIELDS.length)} labelKey="filters" label={L("filters")} edm={edm} sc={scOf("filters")} />
                 <Stat value={dataAsOf} labelKey="sync" label={L("sync")} valueClassName="text-xl sm:text-2xl" count={false} edm={edm} sc={scOf("sync")} />
             </div>

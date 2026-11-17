@@ -9,7 +9,9 @@ after(async () => {
 
 // Phase One: a self-registered customer has the platform features of a normal user (search, Advanced Search, reports, exports, CRM,
 // calendar) and none of the administration, and only ever sees their own private records. Real PostgreSQL + the production build.
-const tag = `P1${randomUUID().slice(0, 6).toUpperCase()}`;
+// The trailing "X" makes the tag 9 characters so it can never look like an 8-character company number (two letters + six digits,
+// which search looks up exactly instead of by name): 6 random hex characters are all digits about 6% of the time.
+const tag = `P1${randomUUID().slice(0, 6).toUpperCase()}X`;
 
 async function registeredCustomer(): Promise<Session> {
   const email = `phase1.${randomUUID().slice(0, 10)}@test.example`;

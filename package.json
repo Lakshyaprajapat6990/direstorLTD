@@ -27,9 +27,12 @@
     "mail:check": "tsx scripts/mail-check.ts",
     "ch:scheduler": "tsx scripts/scheduler.ts",
     "jobs:scheduler": "tsx scripts/scheduler.ts",
+    "jobs:once": "tsx scripts/scheduler.ts --once",
+    "jobs:status": "tsx scripts/scheduler-status.ts",
     "test": "tsx --test tests/unit/*.test.ts",
     "test:integration": "tsx scripts/test-integration.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "jobs:dissolved-sample": "tsx scripts/dissolved-sample.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -44,7 +47,7 @@
     "googleapis": "^182.0.0",
     "jose": "^6.2.12",
     "lucide-react": "^1.48.0",
-    "next": "^16.4.2",
+    "next": "^16.4.6",
     "nodemailer": "^10.2.1",
     "otplib": "13.6.0",
     "pdfkit": "^0.20.2",
@@ -52,7 +55,7 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "yauzl": "^3.4.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@faker-js/faker": "^10.6.0",
@@ -67,7 +70,7 @@
     "@types/yauzl": "^3.4.0",
     "embedded-postgres": "^17.5.0-beta.15",
     "eslint": "^9",
-    "eslint-config-next": "^16.4.3",
+    "eslint-config-next": "^16.4.6",
     "prisma": "^5.22.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",

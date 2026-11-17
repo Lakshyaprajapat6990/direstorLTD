@@ -57,3 +57,6 @@ tests/.browser-output/
 
 # user-uploaded profile pictures (src/lib/avatar.ts)
 /data/
+
+# Local database backups / audit artefacts (contain customer data; never commit; also keeps Tailwind from scanning the dumps)
+/deployment-backup/

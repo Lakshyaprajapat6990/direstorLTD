@@ -10,7 +10,10 @@ export function Dialog({ open, title, onClose, children, size = "md" }: { open: 
   const titleId = useId();
   const box = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  // Keep the latest callback for the key handler below; written after each render, read only when a key is pressed.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;

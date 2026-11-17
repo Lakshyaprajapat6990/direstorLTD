@@ -380,10 +380,10 @@ test("worker crawl (P5): keyset cursor, active companies first, resumes after a 
     };
     const act = [await mkc("a", "active"), await mkc("b", "active"), await mkc("c", "active")];
     const dis = [await mkc("d", "liquidation"), await mkc("e", "administration")]; // live but not active: crawled in the second phase
-    const gone = [await mkc("g", "dissolved"), await mkc("h", "dissolved")]; // dissolved: never crawled (on demand only)
+    const gone = [await mkc("g", "dissolved"), await mkc("h", "dissolved")]; // dissolved: not touched while the dissolved lane is switched off (see the dissolved-lane tests)
     const activeSorted = act.map((c) => c.companyNumber);
 
-    const first = await runOfficerWorker({ queue: false, crawl: true, maxCompanies: 2, exitWhenIdle: true, freshness: false, batchSize: 10 });
+    const first = await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 0, maxCompanies: 2, exitWhenIdle: true, freshness: false, batchSize: 10 });
     assert.equal(first.stopReason, "limit");
     assert.equal(first.crawled, 2);
     const doneFirst = await db.company.findMany({ where: { id: { in: [...act, ...dis].map((c) => c.id) }, officersCoverage: "full" } });
@@ -391,7 +391,7 @@ test("worker crawl (P5): keyset cursor, active companies first, resumes after a 
     assert.ok(doneFirst.every((c) => c.status === "active"), "active companies are crawled first");
     assert.equal((await loadCrawlCursor()).phase, "active");
 
-    const second = await runOfficerWorker({ queue: false, crawl: true, exitWhenIdle: true, freshness: false, batchSize: 10 });
+    const second = await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 0, exitWhenIdle: true, freshness: false, batchSize: 10 });
     assert.equal(second.crawled, 3, "the remaining active company + both live non-active ones");
     for (const c of [...act, ...dis]) assert.equal((await db.company.findUniqueOrThrow({ where: { id: c.id } })).officersCoverage, "full");
     for (const n of [...activeSorted, ...dis.map((c) => c.companyNumber)]) assert.equal(hits[`/company/${n}/officers`], 1, `${n} fetched exactly once`);
@@ -401,13 +401,148 @@ test("worker crawl (P5): keyset cursor, active companies first, resumes after a 
       assert.equal(hits[`/company/${c.companyNumber}/officers`] ?? 0, 0, "and no request is sent for it");
     }
 
-    const third = await runOfficerWorker({ queue: false, crawl: true, exitWhenIdle: true, freshness: false });
+    const third = await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 0, exitWhenIdle: true, freshness: false });
     assert.equal(third.crawled, 0);
     assert.equal(third.stopReason, "idle");
   } finally {
     for (const o of others) await db.company.update({ where: { id: o.id }, data: { source: o.source } });
   }
 });
+
+// ---- DISSOLVED companies are part of the automatic pipeline ---------------------------------------------------------------------
+// Every real company of every status is crawled: the live lane (active first, then the other live statuses) and the dissolved lane take turns,
+// so neither can starve the other, and each company is fetched once. All against the mock Companies House; nothing live is called.
+async function isolated<T>(fn: () => Promise<T>): Promise<T> {
+  const { saveCrawlCursor } = await import("../../src/lib/companies-house/officerQueue");
+  const others = await db.company.findMany({ where: { source: { not: "seed" } }, select: { id: true, source: true } });
+  await db.company.updateMany({ where: { id: { in: others.map((o) => o.id) } }, data: { source: "seed" } });
+  try {
+    await saveCrawlCursor("active", "", 0);
+    await saveCrawlCursor("dissolved", "", 0, "officers_dissolved");
+    return await fn();
+  } finally {
+    for (const o of others) await db.company.update({ where: { id: o.id }, data: { source: o.source } });
+  }
+}
+
+test("dissolved lane: dissolved companies enter the crawl, share it fairly with live ones, are fetched exactly once, and keep their resigned appointments", async () => {
+  const { runOfficerWorker } = await import("../../src/lib/companies-house/officerWorker");
+  await isolated(async () => {
+    const mk = async (label: string, status: string, mode: Mode) => {
+      const num = number(label);
+      modes.set(num, mode);
+      return makeCompany({ companyNumber: num, status });
+    };
+    const live = [await mk("a", "active", "one"), await mk("b", "active", "one"), await mk("c", "active", "one"), await mk("d", "active", "one"), await mk("l", "liquidation", "one")];
+    const dis = [await mk("e", "dissolved", "many"), await mk("f", "dissolved", "many"), await mk("g", "dissolved", "many"), await mk("h", "dissolved", "many")];
+
+    // 50%: the lanes alternate, so four companies are two live and two dissolved (a live company does NOT have to be finished first)
+    const first = await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 50, batchSize: 1, maxCompanies: 4, exitWhenIdle: true, freshness: false });
+    assert.equal(first.crawled, 4);
+    assert.equal(first.crawledDissolved, 2, "half of the crawl went to the dissolved lane");
+    const doneDis = await db.company.count({ where: { id: { in: dis.map((c) => c.id) }, officersCoverage: "full" } });
+    const doneLive = await db.company.count({ where: { id: { in: live.map((c) => c.id) }, officersCoverage: "full" } });
+    assert.deepEqual([doneLive, doneDis], [2, 2], "neither lane starves the other");
+
+    // the rest: everything of every status is fetched, once
+    const second = await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 50, exitWhenIdle: true, freshness: false });
+    assert.equal(second.crawled, 5);
+    for (const c of [...live, ...dis]) {
+      assert.equal((await db.company.findUniqueOrThrow({ where: { id: c.id } })).officersCoverage, "full", c.companyNumber);
+      assert.equal(hits[`/company/${c.companyNumber}/officers`], 1, `${c.companyNumber} fetched exactly once`);
+    }
+    assert.equal(await db.officerSyncJob.count(), 0, "the crawl materialises no job rows");
+
+    // a dissolved company keeps EVERYTHING Companies House lists: current, resigned and secretary records with their dates and roles
+    const d0 = dis[0];
+    const rows = await db.director.findMany({ where: { companyId: d0.id }, orderBy: { name: "asc" } });
+    assert.equal(rows.length, 6, "all six listed officers are stored");
+    assert.equal(rows.filter((r) => r.resignedOn !== null).length, 1, "the resigned appointment keeps its resignation date");
+    assert.ok(rows.some((r) => r.role === "secretary"), "the secretary is stored (and never counted as a director)");
+    assert.ok(rows.every((r) => r.appointedOn && r.appointedOn.toISOString().startsWith("2018-01-01")), "appointment dates are kept");
+    assert.equal((await db.company.findUniqueOrThrow({ where: { id: d0.id } })).directorCount, 4);
+
+    // nothing is fetched again: the finished companies have left the crawl, and the lanes are exhausted
+    const before = officerHits();
+    const third = await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 50, exitWhenIdle: true, freshness: false });
+    assert.equal(third.crawled, 0);
+    assert.equal(third.stopReason, "idle");
+    assert.equal(officerHits(), before, "no company is fetched twice");
+  });
+});
+
+test("dissolved lane: dissolved companies are never re-fetched by the TTL or the unavailable re-check, live ones still are; an on-demand fetch still works", async () => {
+  const { enqueueFreshnessRefreshes, enqueueOfficerJobs, OFFICER_PRIORITY } = await import("../../src/lib/companies-house/officerQueue");
+  const { runOfficerWorker } = await import("../../src/lib/companies-house/officerWorker");
+  const old = new Date(Date.now() - 400 * 86_400_000);
+  const mk = async (label: string, status: string, coverage: string) => {
+    const c = await makeCompany({ companyNumber: number(label), status, officersCoverage: coverage, officersFetchedAt: old, directorCount: coverage === "full" ? 1 : 0 });
+    return c;
+  };
+  const liveFull = await mk("p", "active", "full");
+  const disFull = await mk("q", "dissolved", "full");
+  const liveUnavail = await mk("r", "active", "unavailable");
+  const disUnavail = await mk("s", "dissolved", "unavailable");
+  await enqueueFreshnessRefreshes({ cap: 1000 });
+  const queued = new Set((await db.officerSyncJob.findMany({ select: { companyId: true } })).map((j) => j.companyId));
+  assert.ok(queued.has(liveFull.id) && queued.has(liveUnavail.id), "live companies are refreshed when stale");
+  assert.ok(!queued.has(disFull.id) && !queued.has(disUnavail.id), "a dissolved company's officer list does not change: it is never queued for a re-check");
+
+  // ...but an on-demand request for a dissolved company that was never fetched still goes through the queue and the worker
+  const num = number("t");
+  modes.set(num, "many");
+  const never = await makeCompany({ companyNumber: num, status: "dissolved" });
+  const r = await enqueueOfficerJobs([never.id], { priority: OFFICER_PRIORITY.REPORT, reason: "report" });
+  assert.equal(r.inserted, 1);
+  await db.officerSyncJob.deleteMany({ where: { companyId: { in: [liveFull.id, liveUnavail.id] } } });
+  const stats = await runOfficerWorker({ queue: true, crawl: false, exitWhenIdle: true, freshness: false });
+  assert.equal(stats.full, 1);
+  assert.equal((await db.company.findUniqueOrThrow({ where: { id: never.id } })).officersCoverage, "full");
+});
+
+test("dissolved lane: Companies House having no officer data is 'unavailable' (never a confirmed zero), costs its two requests, and the daily cap still stops the worker", async () => {
+  const { runOfficerWorker } = await import("../../src/lib/companies-house/officerWorker");
+  await db.ingestionRun.deleteMany({ where: { kind: "officer_backfill" } }); // the cap counts what earlier runs spent today
+  await isolated(async () => {
+    const mk = async (label: string, mode: Mode) => {
+      const num = number(label);
+      modes.set(num, mode);
+      return makeCompany({ companyNumber: num, status: "dissolved" });
+    };
+    const gone = [await mk("u", "gone"), await mk("v", "gone"), await mk("w", "gone"), await mk("x", "gone")];
+    const empty = await mk("y", "zero"); // a genuinely empty officer list: CONFIRMED empty, a different thing
+    const first = await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 100, dailyRequestCap: 3, batchSize: 10, exitWhenIdle: true, freshness: false });
+    assert.equal(first.stopReason, "daily_cap", "the request cap is enforced for dissolved companies too");
+    assert.ok(first.requests <= 4, `never more than one company past the cap (${first.requests} requests for a cap of 3)`);
+    const done = await db.company.findMany({ where: { id: { in: [...gone, empty].map((c) => c.id) }, officersCoverage: { not: "none" } } });
+    assert.ok(done.length >= 1 && done.length < 5, "some were processed, the rest wait for the next day");
+    for (const c of done.filter((d) => gone.some((g) => g.id === d.id))) {
+      assert.equal(c.officersCoverage, "unavailable");
+      assert.equal(c.directorCount, 0);
+      assert.ok(c.officersUnavailableReason, "the reason is recorded");
+    }
+    // the rest later, with no cap: the unavailable ones are not fetched again, the empty one is a confirmed empty list
+    await runOfficerWorker({ queue: false, crawl: true, crawlDissolvedPercent: 100, dailyRequestCap: 0, exitWhenIdle: true, freshness: false });
+    const e = await db.company.findUniqueOrThrow({ where: { id: empty.id } });
+    assert.equal(e.officersCoverage, "full");
+    assert.equal(await db.director.count({ where: { companyId: empty.id } }), 0);
+    for (const g of gone) assert.equal((await db.company.findUniqueOrThrow({ where: { id: g.id } })).officersCoverage, "unavailable");
+    for (const g of gone) assert.equal(hits[`/company/${g.companyNumber}/officers`], 1, "each unavailable company was asked once");
+  });
+});
+
+test("re-fetching a dissolved company replaces its appointment rows: no duplicates, resigned records kept", async () => {
+  const num = number("k");
+  modes.set(num, "many");
+  const c = await makeCompany({ companyNumber: num, status: "dissolved" });
+  await sync(c.id, num);
+  assert.equal(await db.director.count({ where: { companyId: c.id } }), 6);
+  await db.company.update({ where: { id: c.id }, data: { officersCoverage: "none" } });
+  await sync(c.id, num);
+  assert.equal(await db.director.count({ where: { companyId: c.id } }), 6, "the rows were replaced, not added to");
+  assert.equal(await db.director.count({ where: { companyId: c.id, resignedOn: { not: null } } }), 1);
+});
+
 
 test("worker: crawl is opt-in - with the queue empty and no --crawl nothing is fetched", async () => {
   const { runOfficerWorker } = await import("../../src/lib/companies-house/officerWorker");

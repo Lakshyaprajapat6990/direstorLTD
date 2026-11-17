@@ -2,6 +2,7 @@ import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
 import { api, db, group, rule, sessionFor } from "./helpers";
 import { buildCompanyWhere, countCompanies, countRealCompanies, iterateCompanies, searchCompanies, SORTABLE_FIELDS, type SortableField } from "../../src/lib/data/companies";
+import { REAL_COMPANIES_WHERE } from "../../src/lib/data/scope";
 
 // Regression tests for the 5.69M-scale query optimisations. Every optimised path
 // is compared with the straightforward implementation it replaced (plain Prisma
@@ -81,7 +82,8 @@ test("countCompanies equals Prisma count() for every kind of filter (AND / OR / 
 
 test("countRealCompanies returns the real-company count and is memoised", async () => {
   const a = await countRealCompanies(60_000);
-  assert.equal(a, await db.company.count({ where: { source: { not: "seed" } } }));
+  // "Real" = the application's own definition: not seed AND a UK company (other suites leave overseas-typed rows in this database).
+  assert.equal(a, await db.company.count({ where: REAL_COMPANIES_WHERE }));
   await db.company.create({ data: { companyNumber: "PF999999", name: "PERF TEST MEMO", status: "active", type: "ltd", incorporationDate: NOW, registeredAddress1: "x", registeredCity: "x", registeredPostcode: "X1 1XX", source: "bulk_import" } });
   try {
     assert.equal(await countRealCompanies(60_000), a, "served from the memo inside the TTL");

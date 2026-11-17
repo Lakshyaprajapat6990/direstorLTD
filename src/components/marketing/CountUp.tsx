@@ -30,7 +30,6 @@ export function CountUp({ value }: { value: string }) {
     if (typeof IntersectionObserver === "undefined") return;
 
     let frame = 0;
-    let observer: IntersectionObserver | undefined;
     node.textContent = formatLike(0, sep);
 
     const run = () => {
@@ -44,10 +43,11 @@ export function CountUp({ value }: { value: string }) {
       frame = requestAnimationFrame(tick);
     };
 
-    observer = new IntersectionObserver(
+    // The callback only runs after the observer exists (observers report asynchronously), so it may refer to it.
+    const observer: IntersectionObserver = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
-          observer?.disconnect();
+          observer.disconnect();
           run();
         }
       },
@@ -56,7 +56,7 @@ export function CountUp({ value }: { value: string }) {
     observer.observe(node);
 
     return () => {
-      observer?.disconnect();
+      observer.disconnect();
       cancelAnimationFrame(frame);
       node.textContent = value;
     };

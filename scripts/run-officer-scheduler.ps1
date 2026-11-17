@@ -33,6 +33,7 @@ $env:OFFICER_DAILY_REQUEST_CAP = "$DailyCap"
 # Explicit "0" (not just unset): a value in the environment or in .env can never switch these on from here.
 $env:STREAM_WORKER_ENABLED = "0"
 $env:MONTHLY_INGEST_ENABLED = "0"
+$env:DISSOLVED_REFRESH_ENABLED = "0"  # the register refresh belongs to the registrations scheduler (scripts/run-registrations-scheduler.ps1)
 
 while (-not (Test-Path $stop)) {
   "[$([DateTime]::UtcNow.ToString('o'))] supervisor: starting scheduler (daily request cap $DailyCap)" | Out-File -Append -Encoding utf8 $log
