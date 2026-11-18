@@ -182,7 +182,6 @@ export default async function DashboardPage() {
                 ["Last updated", lastUpdated ? formatDate(lastUpdated) : "—"],
                 ...(ingestion
                   ? [
-                      ["Dissolved refreshed", ingestion.dissolved.lastSuccessAt ? formatDate(ingestion.dissolved.lastSuccessAt) : "not yet"],
                       ["Director data activity", ingestion.officers.lastActivityAt ? formatDate(ingestion.officers.lastActivityAt) : "not yet"],
                       ["Scheduler", ingestion.scheduler.alive ? "running" : ingestion.scheduler.neverSeen ? "not started" : "stopped"],
                     ]
