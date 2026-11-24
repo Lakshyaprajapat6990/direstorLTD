@@ -198,6 +198,22 @@ npm run jobs:dissolved-sample -- status                                # read-on
 `run` stops before the daily cap (with a reserve), after the request budget, and on any 429 / breaker / quota hand-back; run it again later.
 The estimate is sampling-based: `status` prints each year's sample, population and range. Estimated records are appointment records, not people.
 
+## 12b. Build fails with a React "Invalid hook call" / `useContext` error on `/_global-error`
+
+**Cause: the Node version, not React.** Next.js 16 requires Node >= 20.9; on an older Node the build dies inside React while
+prerendering `/_global-error`, reporting `Invalid hook call` or `Cannot read properties of null (reading 'useContext')`. The
+error names React, so it reads like a dependency problem, and swapping React versions or deleting `node_modules` does not
+help. There is no `global-error.tsx` in this project - that route is Next.js's own default - so nothing in this repository
+can be edited to fix it.
+
+`npm run build` now refuses to start on a Node below **20.12** (`scripts/check-node.js`) and prints the version it found and
+where to change it, so this fails with a clear message instead of a React stack trace. The floor is 20.12 rather than 20.9
+because the scheduler needs `process.loadEnvFile` (section 2).
+
+On Plesk: **Websites & Domains > the domain > Node.js > Node.js version**, choose 20.12 or newer (22 LTS preferred), then run
+**NPM install** again so the native modules are rebuilt against that version. Confirm with `node -v` in the domain's shell;
+Plesk can have several Node versions installed, and the one in the panel is not always the one on the SSH `PATH`.
+
 ## 13. `npm run build` sometimes exits 1 although it compiled
 
 Next.js 16.4.2 ships a built-in upgrade check (`experimental.agentUpgrade`, default `security`). When the build is started by an AI coding
