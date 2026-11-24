@@ -25,6 +25,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "admin:bootstrap": "tsx scripts/bootstrap-super-admin.ts",
     "user:set-password": "tsx scripts/set-password.ts",
+    "avatars:import": "tsx scripts/import-avatars.ts",
     "mail:check": "tsx scripts/mail-check.ts",
     "ch:scheduler": "tsx scripts/scheduler.ts",
     "jobs:scheduler": "tsx scripts/scheduler.ts",

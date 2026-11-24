@@ -1,18 +1,20 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { db } from "@/lib/db";
 
-// Profile pictures live on disk (not in the database), one file per user, named from the user's id only - no user-supplied
-// name or path ever reaches the filesystem. The type is decided from the file's own bytes, never from its declared MIME type.
+// Profile pictures live in the database (table UserAvatar), one row per user, keyed by the user's id only - no user-supplied
+// name or path is ever used. The type is decided from the file's own bytes, never from its declared MIME type.
+//
+// They are NOT kept on disk: the app runs on hosts whose filesystem is read-only or thrown away between requests (Vercel and
+// other serverless platforms), where a written file is refused outright or silently lost. The database is the only store that
+// every deployment shares. Pictures written by an older build are brought across by `npm run avatars:import`.
 
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 export const AVATAR_TYPES = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" } as const;
 export type AvatarExt = keyof typeof AVATAR_TYPES;
 const ID = /^[a-z0-9]{10,40}$/i;
 
-// The /*turbopackIgnore: true*/ hints stop the Turbopack build from tracing the WHOLE project directory because of these runtime-computed
-// paths (on a developer machine that directory can hold tens of GB of backups, which made `next build` run out of memory).
-export const avatarDir = () => path.resolve(/*turbopackIgnore: true*/ process.env.AVATAR_DIR || path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "avatars"));
 export const isUserId = (id: string) => ID.test(id);
+
+const isAvatarExt = (v: string): v is AvatarExt => v in AVATAR_TYPES;
 
 // JPEG / PNG / WebP by magic number; anything else (SVG, GIF, HTML, a renamed executable...) is refused.
 export function detectImageType(b: Uint8Array): AvatarExt | null {
@@ -22,37 +24,32 @@ export function detectImageType(b: Uint8Array): AvatarExt | null {
   return null;
 }
 
-const file = (userId: string, ext: AvatarExt) => path.join(/*turbopackIgnore: true*/ avatarDir(), `${userId}.${ext}`);
-
+// Reports whether this user has a picture and which version it is, WITHOUT reading the bytes: the pages that only need the URL
+// (header, Users list, company detail) must not pull every picture's megabytes out of the database to render a link.
 export async function findAvatar(userId: string): Promise<{ ext: AvatarExt; mtimeMs: number } | null> {
   if (!isUserId(userId)) return null;
-  for (const ext of Object.keys(AVATAR_TYPES) as AvatarExt[]) {
-    try {
-      const st = await fs.stat(/*turbopackIgnore: true*/ file(userId, ext));
-      return { ext, mtimeMs: Math.floor(st.mtimeMs) };
-    } catch {
-      /* not this extension */
-    }
-  }
-  return null;
+  const row = await db.userAvatar.findUnique({ where: { userId }, select: { ext: true, updatedAt: true } });
+  if (!row || !isAvatarExt(row.ext)) return null;
+  return { ext: row.ext, mtimeMs: row.updatedAt.getTime() };
 }
 
 export async function readAvatar(userId: string, ext: AvatarExt): Promise<Buffer> {
-  return fs.readFile(/*turbopackIgnore: true*/ file(userId, ext));
+  if (!isUserId(userId)) throw new Error("bad user id");
+  const row = await db.userAvatar.findUnique({ where: { userId }, select: { data: true, ext: true } });
+  if (!row || row.ext !== ext) throw new Error("no such avatar");
+  return Buffer.from(row.data);
 }
 
 export async function removeAvatar(userId: string): Promise<void> {
   if (!isUserId(userId)) return;
-  for (const ext of Object.keys(AVATAR_TYPES) as AvatarExt[]) await fs.rm(file(userId, ext), { force: true });
+  await db.userAvatar.deleteMany({ where: { userId } }); // deleteMany: no error when there was no picture
 }
 
+// A user has exactly one picture, whatever format it was in before, so this replaces any existing row outright.
 export async function saveAvatar(userId: string, ext: AvatarExt, bytes: Buffer): Promise<void> {
   if (!isUserId(userId)) throw new Error("bad user id");
-  await fs.mkdir(avatarDir(), { recursive: true });
-  const tmp = path.join(avatarDir(), `.${userId}.${Date.now()}.tmp`);
-  await fs.writeFile(tmp, bytes);
-  await removeAvatar(userId); // a user has exactly one picture, whatever format it was in before
-  await fs.rename(tmp, file(userId, ext));
+  const data = { ext, byteSize: bytes.length, data: bytes, updatedAt: new Date() };
+  await db.userAvatar.upsert({ where: { userId }, create: { userId, ...data }, update: data });
 }
 
 // The URL the header/settings use; the version changes whenever the picture does, so the browser never shows a stale one.

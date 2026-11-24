@@ -5,6 +5,16 @@
   "functions": {
     "src/app/api/**/*": {
       "maxDuration": 60
+    },
+    "src/app/api/cron/[job]/route.ts": {
+      "maxDuration": 300
     }
-  }
+  },
+  "crons": [
+    { "path": "/api/cron/daily-update", "schedule": "15 3 * * *" },
+    { "path": "/api/cron/new-registrations", "schedule": "0 */6 * * *" },
+    { "path": "/api/cron/dissolved-refresh", "schedule": "30 4 * * *" },
+    { "path": "/api/cron/officer-worker", "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/reconcile", "schedule": "*/30 * * * *" }
+  ]
 }

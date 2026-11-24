@@ -37,28 +37,41 @@ model User {
   hourlyRateMinor Int?
   rateCurrency    String    @default("GBP")
 
-  reports             Report[]
-  companyStates       UserCompanyState[]
-  activity            ActivityLog[]
-  followUps           FollowUp[]
-  calendarConnections CalendarConnection[]
-  crmContacts         CrmContact[]
-  recentlyViewed      RecentlyViewed[]
-  columnPreference    UserColumnPreference?
-  sessions            UserSession[]
-  customerCompanyViews CustomerCompanyView[]
-  passwordResetTokens  PasswordResetToken[]
-  customerProfile      CustomerProfile?
-  consentRecords       ConsentRecord[]
-  twoFactor            CustomerTwoFactor?
+  reports                Report[]
+  companyStates          UserCompanyState[]
+  activity               ActivityLog[]
+  followUps              FollowUp[]
+  calendarConnections    CalendarConnection[]
+  crmContacts            CrmContact[]
+  recentlyViewed         RecentlyViewed[]
+  columnPreference       UserColumnPreference?
+  sessions               UserSession[]
+  customerCompanyViews   CustomerCompanyView[]
+  passwordResetTokens    PasswordResetToken[]
+  customerProfile        CustomerProfile?
+  consentRecords         ConsentRecord[]
+  twoFactor              CustomerTwoFactor?
   twoFactorRecoveryCodes TwoFactorRecoveryCode[]
-  contactLogs         ContactLog[]
-  assignmentsReceived Assignment[]          @relation("AssignmentAssignee")
-  assignmentsGiven    Assignment[]          @relation("AssignmentAssigner")
-  timesheets          Timesheet[]           @relation("TimesheetOwner")
-  timesheetsReviewed  Timesheet[]           @relation("TimesheetReviewer")
+  contactLogs            ContactLog[]
+  assignmentsReceived    Assignment[]            @relation("AssignmentAssignee")
+  assignmentsGiven       Assignment[]            @relation("AssignmentAssigner")
+  timesheets             Timesheet[]             @relation("TimesheetOwner")
+  timesheetsReviewed     Timesheet[]             @relation("TimesheetReviewer")
+  avatar                 UserAvatar?
 
   @@index([managerId])
+}
+
+// A user's profile picture, stored as bytes in the database rather than on disk: the app runs on hosts with a read-only or
+// ephemeral filesystem (Vercel and other serverless platforms), where a written file is lost or refused outright. One row per
+// user, removed with the user. updatedAt is the cache-busting version in the picture's URL, so a new upload is shown at once.
+model UserAvatar {
+  userId    String   @id
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ext       String
+  byteSize  Int
+  data      Bytes
+  updatedAt DateTime @updatedAt
 }
 
 // Optional contact details a customer chooses to add AFTER registering (Settings > Your details). One row per customer, created on
@@ -313,14 +326,14 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  directors    Director[]
-  crmContacts  CrmContact[]
-  userStates   UserCompanyState[]
-  contactLogs  ContactLog[]
-  assignments  Assignment[]
-  recentViews  RecentlyViewed[]
-  filingEvents FilingEvent[]
-  officerJob   OfficerSyncJob?
+  directors       Director[]
+  crmContacts     CrmContact[]
+  userStates      UserCompanyState[]
+  contactLogs     ContactLog[]
+  assignments     Assignment[]
+  recentViews     RecentlyViewed[]
+  filingEvents    FilingEvent[]
+  officerJob      OfficerSyncJob?
   dissolvedSample DissolvedSample?
   // Low-cardinality booleans use partial indexes + trigram (name) created in
   // the migration SQL (Prisma cannot express them). The officer-coverage

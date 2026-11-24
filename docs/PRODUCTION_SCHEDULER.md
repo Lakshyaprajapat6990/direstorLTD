@@ -208,7 +208,53 @@ A build started by a person in an ordinary shell, or in CI, is not affected. The
 (moderate) and zod (high); fixed versions exist (next 16.4.5 and later). The proper resolution is a dependency upgrade, which is the owner's
 decision. The check has deliberately NOT been disabled.
 
-## 14. What was verified before hand-over
+## 14. Serverless hosting (Vercel): background jobs without the scheduler
+
+On a host where nothing stays resident between requests there is no process to run `npm run jobs:scheduler` in. The jobs are then
+driven by the platform's cron, which calls `GET /api/cron/<job>` on a timetable kept in `vercel.json`. Each path calls the **same
+function** the scheduler calls, so there is one implementation of the work.
+
+| Cron path | Default schedule (UTC) | Replaces |
+|---|---|---|
+| `/api/cron/daily-update` | `15 3 * * *` | Daily maintenance |
+| `/api/cron/new-registrations` | `0 */6 * * *` | New registrations |
+| `/api/cron/dissolved-refresh` | `30 4 * * *` | Dissolved companies **and** the status reconcile (each runs only when the database says it is due) |
+| `/api/cron/officer-worker` | `*/10 * * * *` | Officer / director processing, in ~4-minute slices; what is left stays queued for the next call |
+| `/api/cron/reconcile` | `*/30 * * * *` | Marks jobs whose worker was killed mid-run as failed, so health does not report a dead job as live |
+
+The per-job switches in section 1 and 3 still apply: a job whose `*_ENABLED` variable is off reports `skipped` and does nothing, and
+every job reports `skipped` when `COMPANIES_HOUSE_API_KEY` is absent.
+
+**Authorisation.** Set `CRON_SECRET` (32+ random characters) in the host's environment. The platform sends it as
+`Authorization: Bearer <value>`; every other request gets a plain `404`, and a bad secret and an unknown job are deliberately
+indistinguishable. **Without `CRON_SECRET`, or with one under 16 characters, `/api/cron` refuses everything** - an unauthenticated job
+runner is worse than none. Generate with:
+
+```
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+**Two jobs cannot run this way**, and a deployment that needs them still needs a machine running the real scheduler:
+
+- the **filing stream**, which needs one persistent connection per key (section 1); and
+- the **monthly bulk CSV**, which reads a multi-GB file, far past any function time limit.
+
+Running the scheduler *and* these crons at the same time is safe: every job takes the same database lock, so whichever starts second is
+refused with `JobAlreadyRunningError` and reports `skipped` rather than doing the work twice. It is merely wasteful.
+
+**Function time limits.** `vercel.json` gives `/api/cron/*` 300 s and the other API routes 60 s (the platform's 10 s default is too short
+for the exports and PDF generation). The officer worker stops itself at 4 minutes so it returns before the platform kills it; a job killed
+mid-run leaves a `running` row, which `/api/cron/reconcile` then clears.
+
+**Profile pictures.** These hosts have a read-only, throw-away filesystem, so pictures are stored in the database (table `UserAvatar`),
+not on disk. A deployment that previously ran with pictures in `./data/avatars` brings them across once, after migrating:
+
+```
+npm run avatars:import              # copy, keeping anything already in the database
+npm run avatars:import -- --prune   # and delete each file once it is safely in the database
+```
+
+## 15. What was verified before hand-over
 
 All against a scratch database and a local stand-in for Companies House (no live Companies House request was made): the registration,
 dissolved, status and monthly jobs; the officer worker running through the scheduler; the persistent loop; the lease, duplicate-instance
