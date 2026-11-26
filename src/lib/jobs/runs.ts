@@ -8,7 +8,7 @@ import { db } from "@/lib/db";
 //    Settings/Super Admin never show a crashed job as still running;
 //  - a run is only "success" if its failure rate is honestly low.
 
-export type RunKind = "advanced_search" | "bulk_csv" | "stream" | "officer_backfill" | "daily_update" | "new_registrations" | "scheduler";
+export type RunKind = "advanced_search" | "bulk_csv" | "stream" | "officer_backfill" | "daily_update" | "new_registrations" | "scheduler" | "daily_digest";
 export type RunStatus = "running" | "success" | "partial" | "failed";
 
 // Jobs heartbeat at least every minute (stream: every 30s, CSV: every batch).
@@ -80,7 +80,7 @@ export class JobAlreadyRunningError extends Error {
 // Kinds that must not overlap with themselves (two daily updates or two bulk
 // loads racing would duplicate work and fight over rows). The stream is
 // exempt: Companies House itself allows a single connection per key.
-const SINGLE_FLIGHT: RunKind[] = ["bulk_csv", "daily_update", "officer_backfill", "advanced_search", "new_registrations"];
+const SINGLE_FLIGHT: RunKind[] = ["bulk_csv", "daily_update", "officer_backfill", "advanced_search", "new_registrations", "daily_digest"];
 
 export async function startRun(
   kind: RunKind,

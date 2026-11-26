@@ -883,3 +883,22 @@ model DissolvedSample {
 
   @@index([stratum, status])
 }
+
+// One row per UTC day: the daily Companies House digest (Excel workbook + PDF summary) built by the scheduler's
+// daily_digest job. The files are stored in the database (no writable disk needed), downloaded from Super Admin > Daily
+// digests, and kept for DAILY_DIGEST_KEEP_DAYS.
+model DailyDigest {
+  id               String    @id @default(cuid())
+  // The UTC day the digest covers (00:00 to 24:00 UTC).
+  day              DateTime  @unique @db.Date
+  newCompanies     Int       @default(0)
+  dissolved        Int       @default(0)
+  officerCompanies Int       @default(0)
+  directorRows     Int       @default(0)
+  xlsx             Bytes
+  xlsxBytes        Int
+  pdf              Bytes
+  pdfBytes         Int
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}

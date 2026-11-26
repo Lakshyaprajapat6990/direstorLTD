@@ -12,11 +12,12 @@ const TABS: { key: string; href: string; label: string; superOnly?: boolean; per
   { key: "activity", href: "/admin/activity", label: "Activity & reports", permission: "staff.activity" },
   { key: "timesheets", href: "/admin/timesheets", label: "Timesheets", permission: "timesheets.approve" },
   { key: "customers", href: "/admin/customers", label: "Customers", superOnly: true },
+  { key: "digests", href: "/admin/daily-digests", label: "Daily digests", superOnly: true },
   { key: "columns", href: "/admin/columns", label: "Column & Default Settings", superOnly: true },
   { key: "content", href: "/admin/website-content", label: "Website Content (CMS)", superOnly: true },
 ];
 
-export type AdminTabKey = "overview" | "staff" | "activity" | "timesheets" | "customers" | "columns" | "content";
+export type AdminTabKey = "overview" | "staff" | "activity" | "timesheets" | "customers" | "digests" | "columns" | "content";
 
 export function AdminTabs({ active, viewer }: { active: AdminTabKey; viewer?: { role: UserRole; permissions: readonly string[] } }) {
   // Existing callers are Super Admin-only pages and pass no viewer.

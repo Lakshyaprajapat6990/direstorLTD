@@ -13,6 +13,7 @@ import {
   runStatusReconcile,
   statusReconcileDue,
 } from "@/lib/jobs/dissolvedRefresh";
+import { dailyDigestDue, loadDigestConfig, runDailyDigest } from "@/lib/digest/dailyDigest";
 import { makeLogger } from "@/lib/log";
 
 // Background jobs for hosts that cannot run the long-lived scheduler (`npm run jobs:scheduler`), i.e. serverless platforms
@@ -95,6 +96,15 @@ const JOBS = {
       crawl: process.env.OFFICER_CRAWL_ENABLED === "1",
       log,
     });
+  },
+
+  // Excel + PDF digest of the previous UTC day (database only, no Companies House requests). Only when switched on and not
+  // already built for that day.
+  "daily-digest": async () => {
+    const cfg = loadDigestConfig();
+    if (!cfg.enabled) return { skipped: "DAILY_DIGEST_ENABLED is not 1" };
+    if (!(await dailyDigestDue(new Date(), cfg))) return { skipped: "not due yet, or already built" };
+    return runDailyDigest({ cfg, log });
   },
 
   // Housekeeping: marks jobs whose worker died (a function killed mid-run leaves a "running" row) as failed, so the health

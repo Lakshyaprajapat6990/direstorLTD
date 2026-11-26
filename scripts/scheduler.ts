@@ -18,6 +18,9 @@
 //   the snapshot already loaded, and an interrupted load is resumed, not restarted.
 // - officer worker (OFF by default): OFFICER_WORKER_ENABLED=1 keeps the officer sync worker running (queued work first);
 //   OFFICER_CRAWL_ENABLED=1 additionally lets it walk the background crawl. OFFICER_DAILY_REQUEST_CAP bounds its requests.
+// - daily digest (OFF; DAILY_DIGEST_ENABLED=1): once per UTC day after DAILY_DIGEST_UTC_HOUR (default 06:00) it turns the
+//   previous UTC day's new companies, dissolutions and officer updates into an Excel workbook + PDF summary, stores them
+//   for download under Super Admin > Daily digests. It reads the database only: no API requests.
 // - filing stream (OFF by default; persistent mode only): STREAM_WORKER_ENABLED=1. Companies House allows ONE stream
 //   connection per key, so never also run `npm run ch:stream`.
 //
@@ -57,6 +60,7 @@ import {
   runStatusReconcile,
   statusReconcileDue,
 } from "../src/lib/jobs/dissolvedRefresh";
+import { dailyDigestDue, loadDigestConfig, runDailyDigest } from "../src/lib/digest/dailyDigest";
 import { db } from "../src/lib/db";
 import { makeLogger } from "../src/lib/log";
 
@@ -82,6 +86,7 @@ const DAILY_MAX_ATTEMPTS = num("DAILY_MAX_ATTEMPTS", 5);
 const ONCE_OFFICER_MS = Math.max(1, num("ONCE_OFFICER_MINUTES", 50)) * 60_000;
 const SHUTDOWN_GRACE_MS = Math.max(5, num("SCHEDULER_SHUTDOWN_GRACE_SECONDS", 60)) * 1000;
 const refreshCfg = loadRefreshConfig();
+const digestCfg = loadDigestConfig();
 // Windows cannot deliver SIGTERM to a console process, so a supervisor stops the scheduler GRACEFULLY by creating this file.
 const STOP_FILE = process.env.SCHEDULER_STOP_FILE?.trim() || null;
 
@@ -95,6 +100,7 @@ function enabledJobs(): SchedulerJob[] {
   if (MONTHLY_ENABLED && (!ONCE || WITH_MONTHLY)) jobs.push("monthly_bulk");
   if (OFFICER_WORKER_ENABLED) jobs.push("officer_worker");
   if (STREAM_ENABLED && !ONCE) jobs.push("stream");
+  if (digestCfg.enabled) jobs.push("daily_digest");
   return jobs;
 }
 
@@ -216,6 +222,22 @@ async function maybeRunMonthly(now: Date) {
   }
 }
 
+// Daily digest of the previous UTC day. Decided from the DailyDigest table, so a restart never builds it twice; a failed
+// build leaves no row and is retried on a later tick (at most once every 30 minutes).
+let digestNextAttempt = 0;
+async function maybeRunDailyDigest(now: Date) {
+  if (!digestCfg.enabled || Date.now() < digestNextAttempt) return;
+  if (!(await dailyDigestDue(now, digestCfg))) return;
+  digestNextAttempt = Date.now() + 30 * 60_000;
+  try {
+    const r = await runDailyDigest({ now, cfg: digestCfg, log });
+    log(`Daily digest ${r.day}: ${r.status}, ${r.newCompanies} new, ${r.dissolved} dissolved, ${r.officerCompanies} companies with directors (${r.directorRows} rows)`);
+  } catch (err) {
+    if (err instanceof JobAlreadyRunningError) log(`Daily digest skipped: ${err.message}`);
+    else log(`Daily digest FAILED; retry in 30 min: ${errText(err)}`);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Long-lived workers (persistent mode) and the lanes that keep one job type from overlapping itself in this process.
 // ---------------------------------------------------------------------------------------------------------------------
@@ -280,6 +302,7 @@ async function tick() {
     await maybeRunStatusReconcile(now);
   });
   launch("daily", () => maybeRunDaily(now));
+  launch("digest", () => maybeRunDailyDigest(now));
   launch("monthly", () => maybeRunMonthly(now));
 }
 
@@ -292,6 +315,7 @@ async function runOnce() {
   await maybeRunDissolvedRefresh(now);
   await maybeRunStatusReconcile(now);
   await maybeRunMonthly(now);
+  await maybeRunDailyDigest(now);
   if (OFFICER_WORKER_ENABLED && !shuttingDown) await officerRun(ONCE_OFFICER_MS, true);
 }
 
@@ -341,7 +365,8 @@ async function main() {
     `Scheduler started (${ONCE ? "one pass" : "persistent"}; database ${target ? `${target.host}:${target.port}/${target.database}` : "?"}; jobs: ${jobs.length ? jobs.join(", ") : "none"}; ` +
       `daily ${DAILY_MAX_ATTEMPTS > 0 ? `${DAILY_HOUR}:00 UTC` : "disabled"}; dissolved refresh ${refreshCfg.dissolvedEnabled ? `${refreshCfg.hourUtc}:00 UTC` : "disabled"}; ` +
       `monthly ${MONTHLY_ENABLED ? `day ${MONTHLY_DAY} ${MONTHLY_HOUR}:00 UTC` : "disabled"}; new registrations ${NEW_REG_ENABLED && isRestConfigured() ? `every ${NEW_REG_INTERVAL_MS / 3_600_000}h` : "disabled"}; ` +
-      `officer worker ${OFFICER_WORKER_ENABLED ? (OFFICER_CRAWL_ENABLED ? "on + crawl" : "on, queue only") : "disabled"}; stream ${STREAM_ENABLED ? "on" : "disabled"})`
+      `officer worker ${OFFICER_WORKER_ENABLED ? (OFFICER_CRAWL_ENABLED ? "on + crawl" : "on, queue only") : "disabled"}; stream ${STREAM_ENABLED ? "on" : "disabled"}; ` +
+      `daily digest ${digestCfg.enabled ? `${digestCfg.hourUtc}:00 UTC` : "disabled"})`
   );
 
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) {

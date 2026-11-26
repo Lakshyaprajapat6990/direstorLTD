@@ -20,7 +20,7 @@ import { SCHEDULER_STALE_AFTER_MS, finishRun, reconcileStaleRuns, touchRun } fro
 
 export const SCHEDULER_HEARTBEAT_MS = 30_000;
 
-export const SCHEDULER_JOBS = ["new_registrations", "daily_update", "dissolved_refresh", "status_reconcile", "monthly_bulk", "officer_worker", "stream"] as const;
+export const SCHEDULER_JOBS = ["new_registrations", "daily_update", "dissolved_refresh", "status_reconcile", "monthly_bulk", "officer_worker", "stream", "daily_digest"] as const;
 export type SchedulerJob = (typeof SCHEDULER_JOBS)[number];
 
 export class SchedulerAlreadyRunningError extends Error {

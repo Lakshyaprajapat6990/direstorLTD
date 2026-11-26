@@ -99,6 +99,50 @@ const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
 const REL = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
 const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
 
+export interface WorkbookSheet {
+  // Excel limits: at most 31 characters, none of : \ / ? * [ ]
+  name: string;
+  headers: string[];
+  rows: Cell[][];
+  // true = frozen, filterable header row with widths that follow content; false = fixed widths (a two-column details sheet).
+  table: boolean;
+  widths?: number[];
+}
+
+const safeSheetName = (n: string) => n.replace(/[:\\/?*[\]]/g, " ").slice(0, 31) || "Sheet";
+
+// Any number of sheets. Every sheet uses its first row as a header.
+export function buildWorkbook(sheets: WorkbookSheet[]): Buffer {
+  const overrides = sheets
+    .map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`)
+    .join("");
+  const sheetEls = sheets.map((sh, i) => `<sheet name="${esc(safeSheetName(sh.name))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("");
+  const rels =
+    sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("") +
+    `<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`;
+  const files = [
+    {
+      name: "[Content_Types].xml",
+      data: `${HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${overrides}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+    },
+    {
+      name: "_rels/.rels",
+      data: `${HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    },
+    { name: "xl/workbook.xml", data: `${HEAD}<workbook ${NS} ${REL}><sheets>${sheetEls}</sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", data: `${HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>` },
+    {
+      name: "xl/styles.xml",
+      data: `${HEAD}<styleSheet ${NS}><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>`,
+    },
+    ...sheets.map((sh, i) => ({
+      name: `xl/worksheets/sheet${i + 1}.xml`,
+      data: sheetXml(sh.headers, sh.rows, { freezeHeader: sh.table, widths: sh.widths ?? widths(sh.headers, sh.rows) }),
+    })),
+  ];
+  return zip(files.map((f) => ({ name: f.name, data: Buffer.from(f.data, "utf8") })));
+}
+
 export function buildXlsx(meta: ReportDocMeta, headers: string[], rows: Cell[][]): Buffer {
   const details: Cell[][] = [
     ["Report", meta.title],
@@ -109,33 +153,9 @@ export function buildXlsx(meta: ReportDocMeta, headers: string[], rows: Cell[][]
     ["Generated (UTC)", meta.generatedAt.toISOString().replace("T", " ").slice(0, 16)],
     ["Source", "DIRECTOR.LTD (Companies House data)"],
   ];
-  const files = [
-    {
-      name: "[Content_Types].xml",
-      data: `${HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
-    },
-    {
-      name: "_rels/.rels",
-      data: `${HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
-    },
-    {
-      name: "xl/workbook.xml",
-      data: `${HEAD}<workbook ${NS} ${REL}><sheets><sheet name="Companies" sheetId="1" r:id="rId1"/><sheet name="Report details" sheetId="2" r:id="rId2"/></sheets></workbook>`,
-    },
-    {
-      name: "xl/_rels/workbook.xml.rels",
-      data: `${HEAD}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
-    },
-    {
-      name: "xl/styles.xml",
-      data: `${HEAD}<styleSheet ${NS}><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>`,
-    },
-    { name: "xl/worksheets/sheet1.xml", data: sheetXml(headers, rows, { freezeHeader: true, widths: widths(headers, rows) }) },
-    {
-      // The details sheet uses its first row as a header too: "Field" / "Value".
-      name: "xl/worksheets/sheet2.xml",
-      data: sheetXml(["Field", "Value"], details, { freezeHeader: false, widths: [22, 90] }),
-    },
-  ];
-  return zip(files.map((f) => ({ name: f.name, data: Buffer.from(f.data, "utf8") })));
+  // The details sheet uses its first row as a header too: "Field" / "Value".
+  return buildWorkbook([
+    { name: "Companies", headers, rows, table: true },
+    { name: "Report details", headers: ["Field", "Value"], rows: details, table: false, widths: [22, 90] },
+  ]);
 }

@@ -79,6 +79,7 @@ test("the Super Admin tab bar keeps every existing tab, in order, and adds Websi
     ["activity", "/admin/activity", "Activity & reports", false, "staff.activity"],
     ["timesheets", "/admin/timesheets", "Timesheets", false, "timesheets.approve"],
     ["customers", "/admin/customers", "Customers", true, null],
+    ["digests", "/admin/daily-digests", "Daily digests", true, null],
     ["columns", "/admin/columns", "Column & Default Settings", true, null],
     ["content", "/admin/website-content", "Website Content (CMS)", true, null],
   ]);

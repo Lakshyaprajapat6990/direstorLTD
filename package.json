@@ -34,7 +34,8 @@
     "test": "tsx --test tests/unit/*.test.ts",
     "test:integration": "tsx scripts/test-integration.ts",
     "typecheck": "tsc --noEmit",
-    "jobs:dissolved-sample": "tsx scripts/dissolved-sample.ts"
+    "jobs:dissolved-sample": "tsx scripts/dissolved-sample.ts",
+    "jobs:daily-digest": "tsx scripts/daily-digest.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

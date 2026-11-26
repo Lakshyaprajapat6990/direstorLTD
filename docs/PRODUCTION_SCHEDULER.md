@@ -28,6 +28,7 @@ The scheduler is **one separate Node.js process** that runs from the **repositor
 | Daily maintenance (overdue flags, pending DS01 events, officer queueing, report refresh) | 03:00 UTC, once per UTC day, retried every 30 min up to 5 times; **imports no company data** | on; `DAILY_MAX_ATTEMPTS=0` turns it off |
 | Monthly bulk CSV | from day 3 of each month, 04:00 UTC onward it checks hourly and loads **only when a newer published file exists** than the snapshot already loaded (a restart never reloads a file); an interrupted load resumes from its checkpoint, and if it cannot be resumed (a different file) a fresh load starts | **off** until `MONTHLY_INGEST_ENABLED=1` |
 | Officer / director processing | continuous; queued work first (new registrations, followed/saved/report companies, refreshes), then the background crawl; covers **every company status**: a live lane (active first, then liquidation, administration, receivership, ...) and a **dissolved lane**, taking turns by `OFFICER_CRAWL_DISSOLVED_PERCENT` (default 40% dissolved); each company is fetched once and a dissolved company is never re-fetched; bounded by `OFFICER_DAILY_REQUEST_CAP` and the shared quota gate; failed jobs retry with back-off; a dead worker's jobs return to the queue after the 5-minute lease | **off** until `OFFICER_WORKER_ENABLED=1`; the crawl of existing companies needs `OFFICER_CRAWL_ENABLED=1` too |
+| Daily digest (Excel + PDF) | once per UTC day after 06:00 UTC: the PREVIOUS day's new companies, dissolved companies and director updates as an Excel workbook (every row) and a PDF summary, stored for download under Super Admin > Daily digests; reads the database only (no Companies House requests); kept `DAILY_DIGEST_KEEP_DAYS` (30) | **off** until `DAILY_DIGEST_ENABLED=1` |
 | Filing stream (optional) | persistent mode only; Companies House allows **one** stream connection per key | **off** until `STREAM_WORKER_ENABLED=1` |
 
 Honest limits: the monthly file is monthly, so most company fields refresh monthly, not daily (new companies and dissolutions are daily).
@@ -175,7 +176,10 @@ COMPANIES_HOUSE_API_KEY=...            # a DEDICATED production key
 OFFICER_WORKER_ENABLED=1               OFFICER_CRAWL_ENABLED=1
 OFFICER_DAILY_REQUEST_CAP=...          # the production daily request budget (the code default is 10000)
 DISSOLVED_REFRESH_ENABLED=1            STATUS_RECONCILE_ENABLED=1        MONTHLY_INGEST_ENABLED=1
+DAILY_DIGEST_ENABLED=1                 # daily Excel + PDF under Super Admin > Daily digests
 ```
+
+A digest can also be built by hand for any day: `npm run jobs:daily-digest -- --date 2026-11-25 --out ./digests`.
 
 The website's own environment additionally needs `DATABASE_URL`, `AUTH_SECRET` (32+ random characters), `APP_BASE_URL` / `NEXTAUTH_URL`,
 `TOKEN_ENCRYPTION_KEY`, the SMTP settings and `COMPANIES_HOUSE_API_KEY` (the site fetches a company's officers on demand), plus

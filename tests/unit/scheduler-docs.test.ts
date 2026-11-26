@@ -45,7 +45,7 @@ function envNamesRead(file: string): string[] {
 test("every environment variable the scheduler, guard, refresh jobs, health and status code read is listed in .env.example", () => {
   // Variables that are not configuration an administrator sets (set by the OS / the supervisors / the test harness).
   const notConfig = new Set(["NODE_ENV", "LOG_FORMAT", "SCHEDULER_STOP_FILE", "SCHEDULER_LOG_DIR"]);
-  const files = ["scripts/scheduler.ts", "scripts/scheduler-status.ts", "src/lib/jobs/dissolvedRefresh.ts", "src/lib/jobs/schedulerGuard.ts", "src/app/api/health/route.ts", "src/lib/jobs/health.ts"];
+  const files = ["scripts/scheduler.ts", "scripts/scheduler-status.ts", "src/lib/jobs/dissolvedRefresh.ts", "src/lib/jobs/schedulerGuard.ts", "src/app/api/health/route.ts", "src/lib/jobs/health.ts", "src/lib/digest/dailyDigest.ts"];
   const missing: string[] = [];
   for (const f of files) {
     for (const name of envNamesRead(f)) {
