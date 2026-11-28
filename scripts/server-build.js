@@ -31,6 +31,7 @@ const run = (file, argv) => {
 };
 
 const resolve = (id) => require.resolve(id, { paths: [target] });
-run(resolve("prisma/build/index.js"), ["generate"]);
-run(resolve("next/dist/bin/next"), ["build", ...extra]);
+// --skip-generate: the running site/scheduler lock Prisma's engine file (EPERM); skip when prisma/schema.prisma did not change.
+if (!extra.includes("--skip-generate")) run(resolve("prisma/build/index.js"), ["generate"]);
+run(resolve("next/dist/bin/next"), ["build", ...extra.filter((a) => a !== "--skip-generate")]);
 console.log("BUILD OK in " + target);
