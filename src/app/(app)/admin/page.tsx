@@ -4,6 +4,7 @@ import { Users, UserCheck, FileSearch, Activity, ShieldCheck, Database, Plug, Wo
 import { cn } from "@/lib/cn";
 import { PageHero, HeroChip, MetricTile, SectionCard, Panel, StatRow, StatusPill } from "@/components/admin/AdminUi";
 import { db } from "@/lib/db";
+import { cached } from "@/lib/data/cached";
 import { requireRole } from "@/lib/auth/guard";
 import { Badge } from "@/components/ui/Badge";
 import { formatDate } from "@/lib/data/format";
@@ -25,7 +26,6 @@ export default async function SuperAdminPage() {
     userCount,
     activeUserCount,
     reportCount,
-    companiesCount,
     allReports,
     recentActivity,
     sourceBreakdown,
@@ -35,7 +35,6 @@ export default async function SuperAdminPage() {
     db.user.count(),
     db.user.count({ where: { active: true } }),
     db.report.count(),
-    db.company.count(),
     db.report.findMany({
       orderBy: { createdAt: "desc" },
       take: 20,
@@ -46,11 +45,12 @@ export default async function SuperAdminPage() {
       take: 25,
       include: { user: { select: { name: true } } },
     }),
-    db.company.groupBy({ by: ["source"], _count: { _all: true } }),
+    cached("companies-by-source", 10 * 60_000, () => db.company.groupBy({ by: ["source"], _count: { _all: true } })),
     loadLatestRuns(),
     db.calendarConnection.findMany({ where: { provider: { not: "INTERNAL" } } }),
   ]);
 
+  const companiesCount = sourceBreakdown.reduce((s, r) => s + r._count._all, 0);
   const realCompanies = sourceBreakdown.filter((r) => r.source !== "seed").reduce((s, r) => s + r._count._all, 0);
   const connectedCalendars = calendarConnections.filter((c) => c.status === "CONNECTED").length;
   const erroredCalendars = calendarConnections.filter((c) => c.status === "ERROR").length;

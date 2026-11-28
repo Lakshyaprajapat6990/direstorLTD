@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { requireSession } from "@/lib/auth/guard";
 import { db } from "@/lib/db";
+import { cached } from "@/lib/data/cached";
 import { Badge } from "@/components/ui/Badge";
 import { Settings as SettingsIcon, Database, Plug, Users, Workflow, User as UserIcon, Mail, ShieldCheck, CalendarDays, Megaphone } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -81,11 +82,8 @@ export default async function SettingsPage() {
   const googleConfigured = isGoogleCalendarConfigured();
 
   const [sourceBreakdown, officerStats, latestRuns, calendarConnections] = await Promise.all([
-    db.company.groupBy({ by: ["source"], _count: { _all: true } }),
-    db.company.aggregate({
-      _count: { _all: true },
-      where: { source: { not: "seed" } },
-    }),
+    cached("companies-by-source", 10 * 60_000, () => db.company.groupBy({ by: ["source"], _count: { _all: true } })),
+    cached("companies-real-count", 10 * 60_000, () => db.company.aggregate({ _count: { _all: true }, where: { source: { not: "seed" } } })),
     loadLatestRuns(),
     db.calendarConnection.findMany({ where: { userId: session.userId } }),
   ]);

@@ -153,7 +153,8 @@ export interface RegisterBreakdown {
   directorsConfirmed: number;
 }
 let breakdownCache: { value: RegisterBreakdown; at: number } | null = null;
-export async function getRegisterBreakdown(ttlMs = 5 * 60_000): Promise<RegisterBreakdown> {
+let breakdownInflight: Promise<[{ status: string; _count: { _all: number } }[], number]> | null = null;
+export async function getRegisterBreakdown(ttlMs = 15 * 60_000): Promise<RegisterBreakdown> {
   const now = Date.now();
   if (breakdownCache && now - breakdownCache.at < ttlMs) return breakdownCache.value;
   // directorsConfirmed = THE definition of "companies with confirmed director data", used by the staff Dashboard, the customer
@@ -161,10 +162,14 @@ export async function getRegisterBreakdown(ttlMs = 5 * 60_000): Promise<Register
   // member (directorCount > 0). Companies House answers an empty officer list (HTTP 200, items: []) for a company with no officer
   // data; those are stored as coverage "full" with directorCount 0, so an empty answer, a failed/unfetched request, or a company
   // with only resigned officers or secretaries is never counted.
-  const [byStatus, directorsConfirmed] = await Promise.all([
+  // Single-flight: concurrent page loads share one pair of whole-table queries (30-60 s each on the live server).
+  breakdownInflight ??= Promise.all([
     db.company.groupBy({ by: ["status"], where: REAL_COMPANIES_WHERE, _count: { _all: true } }),
     db.company.count({ where: { ...REAL_COMPANIES_WHERE, officersCoverage: "full", directorCount: { gt: 0 } } }),
-  ]);
+  ]).finally(() => {
+    breakdownInflight = null;
+  });
+  const [byStatus, directorsConfirmed] = await breakdownInflight;
   const count = (rows: { _count: { _all: number } }[]) => rows.reduce((n, r) => n + r._count._all, 0);
   const value = {
     total: count(byStatus),

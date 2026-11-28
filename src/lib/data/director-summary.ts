@@ -77,7 +77,7 @@ async function readBase(now: Date): Promise<Base> {
 }
 
 export async function getDirectorDataSummary(options: { now?: Date; ttlMs?: number; waitForEstimate?: boolean } = {}): Promise<DirectorSummaryView> {
-  const ttlMs = options.ttlMs ?? 30_000;
+  const ttlMs = options.ttlMs ?? 5 * 60_000; // whole-table counts take 30-60 s on the live server
   const now = options.now ?? new Date();
   const fresh = state.base && Date.now() - state.base.at < ttlMs;
   if (!fresh) {
