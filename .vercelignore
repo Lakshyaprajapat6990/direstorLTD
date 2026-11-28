@@ -1,0 +1,11 @@
+/.pgdata
+/.next
+/node_modules
+/.env
+/.env.*
+!/.env.example
+/*.local
+/backups
+/tmp-ingest
+/data
+/.claude

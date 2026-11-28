@@ -65,19 +65,29 @@ export async function runDailyUpdate(options: DailyUpdateOptions = {}): Promise<
     // 1. Overdue flags. A company is late only while it is live (active) and
     // its due date has passed; the flag clears again once the date moves on.
     const today = utcToday();
-    const counts = await Promise.all([
-      db.company.updateMany({ where: { status: "active", accountsNextDue: { lt: today }, accountsOverdue: false }, data: { accountsOverdue: true } }),
-      db.company.updateMany({
-        where: { accountsOverdue: true, OR: [{ status: { not: "active" } }, { accountsNextDue: null }, { accountsNextDue: { gte: today } }] },
-        data: { accountsOverdue: false },
-      }),
-      db.company.updateMany({ where: { status: "active", confirmationNextDue: { lt: today }, confirmationOverdue: false }, data: { confirmationOverdue: true } }),
-      db.company.updateMany({
-        where: { confirmationOverdue: true, OR: [{ status: { not: "active" } }, { confirmationNextDue: null }, { confirmationNextDue: { gte: today } }] },
-        data: { confirmationOverdue: false },
-      }),
-    ]);
-    result.overdueRecomputed = counts.reduce((s, c) => s + c.count, 0);
+    // On a 14M-row table one UPDATE per flag runs for hours and locks rows the website and other jobs need (four of them in
+    // parallel also block each other). So: one flag at a time, in small batches, each its own short transaction.
+    const BATCH = 5000;
+    const batched = async (setSql: string, whereSql: string) => {
+      let total = 0;
+      for (;;) {
+        const n = await db.$executeRawUnsafe(
+          `update "Company" set ${setSql}, "updatedAt" = now()
+           where ctid in (select ctid from "Company" where ${whereSql} limit ${BATCH})`,
+          today,
+        );
+        total += n;
+        if (n < BATCH) return total;
+      }
+    };
+    const active = `"status"::text = 'active'`;
+    const counts = [
+      await batched(`"accountsOverdue" = true`, `${active} and "accountsNextDue" < $1 and "accountsOverdue" = false`),
+      await batched(`"accountsOverdue" = false`, `"accountsOverdue" = true and (not ${active} or "accountsNextDue" is null or "accountsNextDue" >= $1)`),
+      await batched(`"confirmationOverdue" = true`, `${active} and "confirmationNextDue" < $1 and "confirmationOverdue" = false`),
+      await batched(`"confirmationOverdue" = false`, `"confirmationOverdue" = true and (not ${active} or "confirmationNextDue" is null or "confirmationNextDue" >= $1)`),
+    ];
+    result.overdueRecomputed = counts.reduce((s, c) => s + c, 0);
     await touchRun(run.id);
 
     // 2. Pending DS01/DS02 events.

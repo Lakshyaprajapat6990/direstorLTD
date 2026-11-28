@@ -60,3 +60,6 @@ tests/.browser-output/
 
 # Local database backups / audit artefacts (contain customer data; never commit; also keeps Tailwind from scanning the dumps)
 /deployment-backup/
+.env*.local
+# Architecture docs contain the admin password; never commit
+/docs/architecture/

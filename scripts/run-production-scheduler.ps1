@@ -56,6 +56,10 @@ if (Test-Path (Join-Path $repo ".env.local")) { Write-Log "WARNING: .env.local e
 $env:NODE_ENV = "production"
 $env:SCHEDULER_STOP_FILE = $StopFile
 if (-not $env:LOG_FORMAT) { $env:LOG_FORMAT = "json" }
+# Under an IIS/Plesk site account os.userInfo() fails and tsx crashes at start; preload a fallback (harmless elsewhere).
+$userInfoFix = Join-Path $repo "scripts\userinfo-fix.cjs"
+if (Test-Path $userInfoFix) { $env:NODE_OPTIONS = "--require `"$($userInfoFix -replace '\\', '/')`"" }  # NODE_OPTIONS eats backslashes
+Write-Log "NODE_OPTIONS preload: $([bool]$env:NODE_OPTIONS)"
 
 function Rotate-Log {
   if ((Test-Path $log) -and ((Get-Item $log).Length -gt ($MaxLogMegabytes * 1MB))) {
@@ -67,7 +71,8 @@ function Rotate-Log {
 while (-not (Test-Path $StopFile)) {
   Rotate-Log
   Write-Log "starting scheduler (repo $repo)"
-  cmd /c "node `"$tsx`" scripts\scheduler.ts >> `"$log`" 2>&1"
+  $pre = ""; if (Test-Path $userInfoFix) { $pre = "--require `"$userInfoFix`" " }
+  cmd /c "node $pre`"$tsx`" scripts\scheduler.ts >> `"$log`" 2>&1"
   $code = $LASTEXITCODE
   $delay = 15
   if ($code -eq 2) { $delay = 300 } elseif ($code -eq 3) { $delay = 120 }
